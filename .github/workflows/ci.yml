@@ -1,0 +1,22 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Unit + rules suites
+        run: npm test
+      - name: Perft — a single mismatched node fails the build
+        run: npm run perft
+      - name: Desync fuzz
+        run: npm run fuzz
+      - name: Production build
+        run: npm run build
