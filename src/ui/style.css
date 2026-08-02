@@ -1,0 +1,350 @@
+/* CRESTFALL UI — dark Norse-clean. System fonts only. All foreground/background
+   pairs hold >= 4.5:1 contrast and every state cue has a shape, not just a color. */
+
+.cf-ui {
+  --cf-bg: #14161b;
+  --cf-panel: #1e222b;
+  --cf-panel-edge: #3a4150;
+  --cf-text: #e9e6dc;
+  --cf-muted: #b0b5c0;
+  --cf-accent: #d9a441;
+  --cf-focus: #8fc1ee;
+  --cf-danger: #ff9d8f;
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--cf-text);
+  background: var(--cf-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  line-height: 1.4;
+}
+
+.cf-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Focus is always visible, everywhere. */
+.cf-ui :focus-visible,
+.cf-overlay:focus-visible {
+  outline: 3px solid var(--cf-focus);
+  outline-offset: 2px;
+}
+
+/* ── Controls ────────────────────────────────────────────────────────────── */
+
+.cf-ui button {
+  min-height: 40px;
+  min-width: 40px;
+  padding: 0.4rem 0.9rem;
+  font: inherit;
+  color: var(--cf-text);
+  background: var(--cf-panel);
+  border: 1px solid var(--cf-panel-edge);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.cf-ui button:hover {
+  background: #2a2f3b;
+  border-color: var(--cf-accent);
+}
+
+.cf-ui select,
+.cf-control {
+  min-height: 40px;
+  font: inherit;
+  color: var(--cf-text);
+  background: var(--cf-panel);
+  border: 1px solid var(--cf-panel-edge);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+}
+
+.cf-ui input[type='range'] {
+  min-height: 40px;
+  width: 8rem;
+  accent-color: var(--cf-accent);
+}
+
+.cf-ui label {
+  color: var(--cf-text);
+}
+
+.cf-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.cf-field,
+.cf-slider {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.cf-sliders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+/* ── Banner ──────────────────────────────────────────────────────────────── */
+
+.cf-banner {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0.4rem 0.9rem;
+  background: var(--cf-panel);
+  border: 1px solid var(--cf-panel-edge);
+  border-left: 6px solid var(--cf-accent);
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+/* ── Side panel: clocks + moves ──────────────────────────────────────────── */
+
+.cf-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 22rem;
+}
+
+.cf-clocks {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.cf-clock {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 40px;
+  padding: 0.35rem 0.6rem;
+  background: var(--cf-panel);
+  border: 1px solid var(--cf-panel-edge);
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Active side is marked by a pointer glyph and a doubled edge — shape, not color. */
+.cf-clock-marker {
+  visibility: hidden;
+  color: var(--cf-accent);
+}
+
+.cf-clock.cf-active .cf-clock-marker {
+  visibility: visible;
+}
+
+.cf-clock.cf-active {
+  border-width: 2px;
+  border-style: double;
+  border-color: var(--cf-accent);
+}
+
+.cf-clock-label {
+  color: var(--cf-muted);
+  margin-right: auto;
+}
+
+.cf-panel {
+  background: var(--cf-panel);
+  border: 1px solid var(--cf-panel-edge);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+
+.cf-panel-title {
+  font-size: 0.85rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cf-muted);
+  margin: 0 0 0.4rem;
+}
+
+.cf-moves {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cf-move {
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+  border-left: 3px solid transparent;
+}
+
+/* Current move: bolder weight + bar, readable in greyscale. */
+.cf-move.cf-current {
+  background: #333c4e;
+  border-left-color: var(--cf-accent);
+  font-weight: 700;
+}
+
+/* ── Board cursor overlay ────────────────────────────────────────────────── */
+
+.cf-overlay {
+  position: absolute;
+  display: none;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.cf-overlay.cf-placed {
+  display: grid;
+}
+
+.cf-cell {
+  position: relative;
+  border: 0 solid transparent;
+}
+
+.cf-cell.cf-cursor {
+  border: 3px solid var(--cf-focus);
+  border-radius: 4px;
+}
+
+.cf-cell.cf-selected {
+  border: 3px dashed var(--cf-accent);
+  border-radius: 4px;
+}
+
+.cf-cell.cf-target::after {
+  content: '';
+  position: absolute;
+  inset: 38%;
+  border-radius: 50%;
+  border: 2px solid var(--cf-accent);
+  background: rgba(217, 164, 65, 0.35);
+}
+
+/* ── Dialogs ─────────────────────────────────────────────────────────────── */
+
+.cf-dialog {
+  background: var(--cf-panel);
+  color: var(--cf-text);
+  border: 1px solid var(--cf-panel-edge);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  min-width: 18rem;
+  max-width: min(90vw, 34rem);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.cf-dialog::backdrop {
+  background: rgba(8, 9, 12, 0.7);
+}
+
+.cf-dialog-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+  letter-spacing: 0.06em;
+}
+
+.cf-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.cf-dialog-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.cf-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.cf-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 40px;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--cf-panel-edge);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.cf-choice input {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--cf-accent);
+}
+
+.cf-fieldset {
+  border: 1px solid var(--cf-panel-edge);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.cf-fieldset:disabled {
+  opacity: 0.5;
+}
+
+.cf-io-text {
+  font: 0.9rem/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--cf-text);
+  background: var(--cf-bg);
+  border: 1px solid var(--cf-panel-edge);
+  border-radius: 6px;
+  padding: 0.5rem;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.cf-error {
+  color: var(--cf-danger);
+  min-height: 1.2em;
+}
+
+.cf-error:not(:empty)::before {
+  content: '⚠ ';
+}
+
+/* ── Reduced motion: kill every transition (media default + explicit setting) */
+
+@media (prefers-reduced-motion: reduce) {
+  .cf-ui *,
+  .cf-overlay * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+.cf-reduced *,
+.cf-reduced {
+  transition: none !important;
+  animation: none !important;
+}
