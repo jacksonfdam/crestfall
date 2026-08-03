@@ -51,6 +51,24 @@ db-stop:
 db-reset:
 	supabase db reset
 
+## Apply the schema to the SHARED hosted project.
+## `supabase db push` cannot be used there: the hosted project's migration
+## history belongs to uBomber, and two repos cannot share one history. The SQL
+## is idempotent, so re-running this is safe. Needs SUPABASE_DB_URL (Dashboard →
+## Project Settings → Database → Connection string, session pooler).
+## psql runs in a container so it need not be installed locally.
+db-apply-shared:
+	@test -n "$$SUPABASE_DB_URL" || { \
+		echo "SUPABASE_DB_URL is not set."; \
+		echo "  export SUPABASE_DB_URL='postgresql://postgres.<ref>:<password>@<host>:5432/postgres'"; \
+		exit 1; }
+	@for f in supabase/migrations/*.sql; do \
+		echo "applying $$f"; \
+		docker run --rm -i postgres:15-alpine \
+			psql "$$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -q -f - < "$$f" || exit 1; \
+	done
+	@echo "schema applied to the shared project"
+
 ## Open Supabase Studio for the local stack
 db-studio:
 	open http://localhost:54423
