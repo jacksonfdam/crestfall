@@ -1,5 +1,9 @@
 # Credits
 
+## Creative direction and code
+
+Jackson Mafra
+
 All code, art direction, character designs, animation choreography, and audio
 synthesis in CRESTFALL are original works created for this project.
 

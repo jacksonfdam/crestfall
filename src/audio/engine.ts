@@ -718,8 +718,22 @@ export const CUE_BUILDERS: Record<CueName, CueBuilder> = {
 
 interface ActiveVoice {
   voice: CueVoice;
+  /** Cue name — a long voice is cut rather than stacked on top of itself. */
+  cue: string;
+  /** When the voice stops making sound. */
+  soundsUntil: number;
+  /** When its subgraph is safe to disconnect. */
   endsAt: number;
 }
+
+/**
+ * A voice at least this long is tonal enough that re-firing the same cue while
+ * it is still sounding fuses the two into one held note instead of reading as
+ * two accents. Duels lean on repeated cues — three runes half a second apart on
+ * a 1.3s voice, a giant grinding through a whole unfold — so for these the new
+ * accent cuts its predecessor short instead of layering over it.
+ */
+const SELF_STACK_LIMIT = 0.6;
 
 export class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -749,7 +763,20 @@ export class AudioEngine {
       this.musicBus = this.ctx.createGain();
       this.sfxBus = this.ctx.createGain();
       this.musicBus.connect(this.master);
-      this.sfxBus.connect(this.master);
+      // Duels stack cues by design — a capture can have an impact, a body fall
+      // and a vocal all sounding at once, and several cues already peak near
+      // full scale alone. Without a limiter on the way out those sums clip, and
+      // clipping on a percussive bus reads as a nasty buzz rather than as
+      // loudness. Fast attack so transients are caught, slow release so it does
+      // not pump between beats.
+      const limiter = this.ctx.createDynamicsCompressor();
+      limiter.threshold.value = -8;
+      limiter.knee.value = 6;
+      limiter.ratio.value = 12;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.18;
+      this.sfxBus.connect(limiter);
+      limiter.connect(this.master);
       this.master.connect(this.ctx.destination);
       this.applySettings(this.settings);
       this.score = new Score(this.ctx, this.musicBus, mulberry32(this.seed ^ 0x5c07e));
@@ -781,16 +808,45 @@ export class AudioEngine {
     if (!this.ctx || !this.sfxBus || this.ctx.state !== 'running') return;
     const now = this.ctx.currentTime;
     this.sweep(now);
+    this.cutSelfStack(cue, now);
     while (this.voices.length >= MAX_VOICES) {
       const oldest = this.voices.shift();
-      if (oldest) {
-        oldest.voice.stop(now);
-        this.fading.push({ voice: oldest.voice, endsAt: now + 0.4 });
-      }
+      if (oldest) this.retire(oldest, now);
     }
     const clamped = Math.min(1.5, Math.max(0.05, intensity));
     const voice = CUE_BUILDERS[cue](this.ctx, this.sfxBus, this.prng, clamped);
-    this.voices.push({ voice, endsAt: now + voice.duration + 0.5 });
+    this.voices.push({
+      voice,
+      cue,
+      soundsUntil: now + voice.duration,
+      endsAt: now + voice.duration + 0.5,
+    });
+  }
+
+  /** Release a voice early and hold its subgraph until the ramp has finished. */
+  private retire(v: ActiveVoice, now: number): void {
+    v.voice.stop(now);
+    this.fading.push({ ...v, soundsUntil: now, endsAt: now + 0.4 });
+  }
+
+  /**
+   * Stop any still-sounding voice of the same long cue, so a repeated accent
+   * re-articulates instead of blurring into a held note.
+   */
+  private cutSelfStack(cue: string, now: number): void {
+    const keep: ActiveVoice[] = [];
+    for (const v of this.voices) {
+      if (
+        v.cue === cue &&
+        v.voice.duration >= SELF_STACK_LIMIT &&
+        now < v.soundsUntil
+      ) {
+        this.retire(v, now);
+      } else {
+        keep.push(v);
+      }
+    }
+    this.voices = keep;
   }
 
   /** Disconnect expired voices so feedback subgraphs never accumulate. */

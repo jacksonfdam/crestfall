@@ -49,7 +49,13 @@ describe('AI cancellation', () => {
   });
 
   it('pausing between depths does not change the chosen move', () => {
-    const limits = { budgetMs: 500, maxDepth: 5, noiseCp: 0, seed: 99 };
+    // Depth must be bounded by maxDepth, NOT by the clock. The deepening loop
+    // stops on elapsed time (search.ts), so a wall-clock budget here made the
+    // two runs race: `search` warms the transposition table, the stepped run
+    // then gets further in the same budget, and the depths no longer match.
+    // A budget this generous can never bind, so both runs deterministically
+    // complete the same iterations on any machine.
+    const limits = { budgetMs: 60_000, maxDepth: 4, noiseCp: 0, seed: 99 };
     const direct = search(MIDGAME, limits);
 
     const steps = searchSteps(MIDGAME, limits);
