@@ -3,7 +3,8 @@
  * "tagelharpa" phrases picked by seeded PRNG. Intensity 0..1 raises phrase
  * density and brings in a low pulse. All events are scheduled on absolute
  * AudioContext time (nextTime += step), so the loop never drifts. Levels are
- * kept low so the score sits under sfx in the mix.
+ * kept low so the score sits under sfx in the mix, and the output is shelved and
+ * low-passed so the plucks read as warm rather than glassy.
  */
 
 import type { PRNG } from '../core/prng.ts';
@@ -45,7 +46,26 @@ export class Score {
     this.tenseBus.gain.value = 0;
     this.calmBus.connect(this.out);
     this.tenseBus.connect(this.out);
-    this.out.connect(dest);
+
+    // Voicing. Karplus-Strong plucks are harmonically rich, and over a drone
+    // this dark their upper partials stand out as a shrill ping rather than as
+    // brightness. The drone fundamentals live between 36 and 110 Hz and the
+    // plucks between 147 and 524 Hz, so everything musical sits well below this
+    // shelf; only the harmonic glare is taken off.
+    const glare = ctx.createBiquadFilter();
+    glare.type = 'highshelf';
+    glare.frequency.value = 2200;
+    glare.gain.value = -5;
+
+    const ceiling = ctx.createBiquadFilter();
+    ceiling.type = 'lowpass';
+    ceiling.frequency.value = 3200;
+    // No resonance: a peak here would reintroduce exactly what it removes.
+    ceiling.Q.value = 0.4;
+
+    this.out.connect(glare);
+    glare.connect(ceiling);
+    ceiling.connect(dest);
   }
 
   start(): void {
@@ -163,13 +183,15 @@ export class Score {
     let degree = Math.floor(this.prng() * this.scale.length);
     let t = when;
     for (let n = 0; n < noteCount; n++) {
-      const octave = this.prng() < 0.3 ? 2 : 1;
+      // The octave jump is the shrillest thing the score can do, so it stays
+      // rare and the pluck itself is voiced darker than it was.
+      const octave = this.prng() < 0.18 ? 2 : 1;
       const st = this.scale[degree % this.scale.length] ?? 0;
       const part = ksPluck(this.ctx, this.calmBus, this.prng, {
         when: t,
         frequency: semitone(ROOT * 2 * octave, st),
         duration: 1.6,
-        brightness: 0.3 + this.intensity * 0.3,
+        brightness: 0.16 + this.intensity * 0.16,
         gain: 0.16 + this.prng() * 0.05,
       });
       this.plucks.push({ part, endsAt: t + PLUCK_RING });
