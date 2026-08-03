@@ -17,6 +17,7 @@ import { PIECE_CHARACTER } from '../core/contract.ts';
 import type { CharacterRig, CharacterOptions, DuelCameraRig } from '../core/stage.ts';
 import { mulberry32 } from '../core/prng.ts';
 import { squareToWorld, worldToSquare } from './boardMath.ts';
+import { endTravel, gaitFor, stepTravel, travelSeconds, type Gait } from './locomotion.ts';
 
 export type ViewMode = '3d' | '2d';
 
@@ -38,13 +39,24 @@ interface PieceEntry {
   piece: ColoredPiece;
 }
 
+/**
+ * A piece on its way to a square. It holds the rig rather than the root object
+ * because travel poses bones as well as moving them (see ./locomotion.ts), and
+ * the rig can be swapped underneath mid-travel on a view change.
+ */
 interface Glide {
-  object: THREE.Object3D;
+  rig: CharacterRig;
   from: THREE.Vector3;
+  /** Progress in [0,1]. */
   t: number;
+  /** Wall-clock length of this journey, seconds. */
+  seconds: number;
+  gait: Gait;
+  /** Squares covered, which sets the stride count. */
+  distance: number;
+  /** Yaw facing the direction of travel. */
+  heading: number;
 }
-
-const GLIDE_SECONDS = 0.12;
 const CAMERA_RETURN_SECONDS = 0.45;
 const ORBIT_MIN_POLAR = 0.25;
 const ORBIT_MAX_POLAR = 1.32;
@@ -609,11 +621,16 @@ export class Stage {
       // Hand any in-flight glide to the replacement: dropping it here would
       // leave the glide writing positions on a disposed rig, and pop the
       // swapped piece to its destination mid-slide.
-      const glide = this.glides.find((g) => g.object === entry.rig.root);
+      const glide = this.glides.find((g) => g.rig === entry.rig);
       entry.anchor.remove(entry.rig.root);
       entry.rig.dispose();
       this.attachRig(entry.anchor, replacement);
-      if (glide) glide.object = replacement.root;
+      if (glide) {
+        glide.rig = replacement;
+        // 2D emblems have no anatomy to step with, and full rigs do — the gait
+        // has to change with the body the journey is finishing in.
+        glide.gait = gaitFor(PIECE_CHARACTER[entry.piece.type], flat);
+      }
       this.pieces.set(sq, { ...entry, rig: replacement });
     }
   }
@@ -673,11 +690,22 @@ export class Stage {
         const from = entry.anchor.position.clone();
         entry.anchor.position.set(wx, wy, wz);
         if (!this.reducedMotion) {
+          // The anchor is already on the destination square; the rig walks the
+          // offset off over the course of the journey.
           entry.rig.root.position.copy(from.sub(entry.anchor.position));
+          const offset = entry.rig.root.position;
+          const gait = gaitFor(PIECE_CHARACTER[want.type], flat);
+          const distance = Math.hypot(offset.x, offset.z);
           this.glides.push({
-            object: entry.rig.root,
-            from: entry.rig.root.position.clone(),
+            rig: entry.rig,
+            from: offset.clone(),
             t: 0,
+            seconds: travelSeconds(gait, distance),
+            gait,
+            distance,
+            // A rig's neutral gaze is -Z, and it travels from the offset
+            // towards the anchor it is now parented to.
+            heading: Math.atan2(offset.x, offset.z),
           });
         }
         this.pieces.set(sq, entry);
@@ -692,7 +720,7 @@ export class Stage {
     }
 
     for (const [, entry] of stale) {
-      this.glides = this.glides.filter((g) => g.object !== entry.rig.root);
+      this.glides = this.glides.filter((g) => g.rig !== entry.rig);
       this.pieceLayer.remove(entry.anchor);
       entry.rig.dispose();
     }
@@ -859,9 +887,21 @@ export class Stage {
     this.resizeIfNeeded();
 
     for (const g of this.glides) {
-      g.t += dt / GLIDE_SECONDS;
-      const k = 1 - easeInOut(g.t);
-      g.object.position.copy(g.from).multiplyScalar(k);
+      g.t = Math.min(1, g.t + dt / g.seconds);
+      if (g.t >= 1) {
+        // Land exactly on rest: square to the board, feet together, no lean.
+        endTravel(g.rig);
+        continue;
+      }
+      const remaining = 1 - easeInOut(g.t);
+      g.rig.root.position.copy(g.from).multiplyScalar(remaining);
+      g.rig.root.position.y += stepTravel(
+        g.rig,
+        g.gait,
+        g.t,
+        g.distance,
+        g.heading,
+      );
     }
     this.glides = this.glides.filter((g) => g.t < 1);
 
