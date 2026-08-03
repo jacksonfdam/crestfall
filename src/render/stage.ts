@@ -268,6 +268,12 @@ export class Stage {
   private readonly returnFromPos = new THREE.Vector3();
   private readonly returnFromLook = new THREE.Vector3();
   private readonly shakeOffset = new THREE.Vector3();
+
+  /** Scratch vectors for hot paths — the render loop and pointer picking. */
+  private readonly scratchVec3 = new THREE.Vector3();
+  private readonly scratchVec3b = new THREE.Vector3();
+  private readonly scratchVec2 = new THREE.Vector2();
+  private readonly scratchSize = new THREE.Vector2();
   private readonly shakePrng = mulberry32(0x5eed);
 
   // highlights
@@ -588,22 +594,27 @@ export class Stage {
     const flat = mode === '2d';
     for (const [sq, entry] of this.pieces) {
       const swapped = this.variantHook?.(entry.rig, flat);
-      if (swapped && swapped !== entry.rig) {
-        entry.anchor.remove(entry.rig.root);
-        entry.rig.dispose();
-        this.attachRig(entry.anchor, swapped);
-        this.pieces.set(sq, { ...entry, rig: swapped });
-      } else if (!swapped && this.lastBuilder) {
-        entry.anchor.remove(entry.rig.root);
-        entry.rig.dispose();
-        const rig = this.lastBuilder(
-          PIECE_CHARACTER[entry.piece.type],
-          factionOf(entry.piece.color),
-          { flat },
-        );
-        this.attachRig(entry.anchor, rig);
-        this.pieces.set(sq, { ...entry, rig });
-      }
+      const replacement =
+        swapped && swapped !== entry.rig
+          ? swapped
+          : !swapped && this.lastBuilder
+            ? this.lastBuilder(
+                PIECE_CHARACTER[entry.piece.type],
+                factionOf(entry.piece.color),
+                { flat },
+              )
+            : null;
+      if (!replacement) continue;
+
+      // Hand any in-flight glide to the replacement: dropping it here would
+      // leave the glide writing positions on a disposed rig, and pop the
+      // swapped piece to its destination mid-slide.
+      const glide = this.glides.find((g) => g.object === entry.rig.root);
+      entry.anchor.remove(entry.rig.root);
+      entry.rig.dispose();
+      this.attachRig(entry.anchor, replacement);
+      if (glide) glide.object = replacement.root;
+      this.pieces.set(sq, { ...entry, rig: replacement });
     }
   }
 
@@ -651,7 +662,7 @@ export class Stage {
       for (let i = 0; i < stale.length; i++) {
         const [, entry] = stale[i];
         if (entry.piece.type !== want.type || entry.piece.color !== want.color) continue;
-        const d = entry.anchor.position.distanceToSquared(new THREE.Vector3(wx, wy, wz));
+        const d = entry.anchor.position.distanceToSquared(this.scratchVec3.set(wx, wy, wz));
         if (d < bestDist) {
           bestDist = d;
           bestIdx = i;
@@ -767,7 +778,7 @@ export class Stage {
   private pickSquare(e: PointerEvent): Square {
     const rect = this.canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return -1;
-    const ndc = new THREE.Vector2(
+    const ndc = this.scratchVec2.set(
       ((e.clientX - rect.left) / rect.width) * 2 - 1,
       -((e.clientY - rect.top) / rect.height) * 2 + 1,
     );
@@ -793,14 +804,15 @@ export class Stage {
           this.duelStartLook.copy(this.orbitTarget);
         }
         const k = this.reducedMotion ? 1 : easeInOut(t);
+        // moveTo runs every frame of a duel — keep it allocation-free.
         this.duelDesiredPos.lerpVectors(
           this.duelStartPos,
-          new THREE.Vector3(pos[0], pos[1], pos[2]),
+          this.scratchVec3.set(pos[0], pos[1], pos[2]),
           k,
         );
         this.duelDesiredLook.lerpVectors(
           this.duelStartLook,
-          new THREE.Vector3(lookAt[0], lookAt[1], lookAt[2]),
+          this.scratchVec3.set(lookAt[0], lookAt[1], lookAt[2]),
           k,
         );
       },
@@ -865,9 +877,9 @@ export class Stage {
     } else if (this.returning) {
       this.returnT += dt / CAMERA_RETURN_SECONDS;
       const k = easeInOut(this.returnT);
-      const target = this.orbitPosition(new THREE.Vector3());
+      const target = this.orbitPosition(this.scratchVec3);
       this.perspCamera.position.lerpVectors(this.returnFromPos, target, k);
-      const look = new THREE.Vector3().lerpVectors(this.returnFromLook, this.orbitTarget, k);
+      const look = this.scratchVec3b.lerpVectors(this.returnFromLook, this.orbitTarget, k);
       this.perspCamera.lookAt(look);
       if (this.returnT >= 1) this.returning = false;
     } else {
@@ -884,7 +896,7 @@ export class Stage {
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
     if (w === 0 || h === 0) return;
-    const size = new THREE.Vector2();
+    const size = this.scratchSize;
     this.renderer.getSize(size);
     const pr = this.renderer.getPixelRatio();
     if (Math.abs(size.x - w) > 0.5 || Math.abs(size.y - h) > 0.5 || pr === 0) {
