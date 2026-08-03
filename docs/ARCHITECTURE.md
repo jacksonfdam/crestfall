@@ -87,4 +87,4 @@ synthesized); move input responds < 50 ms regardless of animation state.
 No Interplay-derived content. No film references in any duel (specifically:
 nothing evoking the Monty Python black-knight scene or the Raiders swordsman
 scene). Homage sources allowed: Norse sagas, Bayeux Tapestry, Poetic Edda,
-medieval marginalia. Engine is our own negamax — no Stockfish, no GPL code.
+medieval marginalia. Engine is our own alpha-beta search — no Stockfish, no GPL code.

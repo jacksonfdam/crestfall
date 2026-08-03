@@ -35,7 +35,7 @@ beyond system defaults, or opening books. All geometry procedural, all audio
 synthesized at runtime. This is what keeps the payload under 8 MB with zero
 asset files, and it is a licensing position as much as a technical one.
 
-**Our own engine.** A from-scratch negamax with alpha-beta, quiescence and a
+**Our own engine.** A from-scratch minimax with alpha-beta pruning, quiescence and a
 transposition table. Explicitly not Stockfish: it is GPLv3 and embedding it would
 relicense the project.
 

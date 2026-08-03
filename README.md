@@ -25,7 +25,7 @@ Built with [Three.js](https://threejs.org), backed by
   readable in greyscale
 - 🔗 **Challenge a friend with a link** — no account, no sign-up, just type a
   name. Links are single-use and last 15 minutes
-- 🤖 **Four AI tiers** — Thrall to Konungr, our own negamax engine in a Web
+- 🤖 **Four AI tiers** — Thrall to Konungr, our own alpha-beta search engine in a Web
   Worker with a hard time budget, so input never stalls behind a search
 - 🎬 **3D and 2D** — one scene drives a cinematic perspective board and a crisp
   top-down view, where duels become compact heraldic vignettes
@@ -89,7 +89,7 @@ seeded PRNG, so replays are byte-identical.
 
 ## Licensing and provenance
 
-**The chess AI is our own engine** — negamax with alpha-beta pruning, quiescence
+**The chess AI is our own engine** — minimax with alpha-beta pruning, quiescence
 search, and a transposition table, written from scratch in `src/ai/`. 
 We  deliberately do **not** ship Stockfish or any GPL-licensed engine: Stockfish is
 GPLv3 and embedding it would place this entire project under GPLv3. 
