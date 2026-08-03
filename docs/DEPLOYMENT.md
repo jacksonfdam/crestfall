@@ -25,9 +25,25 @@ file next to `index.html` in whatever you deploy:
 }
 ```
 
-On Vercel, the simplest route is to generate it during the build from
-environment variables, or commit an environment-specific copy outside this repo.
-`public/config.json` is gitignored here on purpose.
+The build generates it for you. `npm run build` runs
+`scripts/write-runtime-config.ts` first, which writes `public/config.json` from
+two environment variables:
+
+| Variable             | Value                          |
+|----------------------|--------------------------------|
+| `SUPABASE_URL`       | `https://<project>.supabase.co` |
+| `SUPABASE_ANON_KEY`  | the project's anon key          |
+
+On Vercel, set both under Settings → Environment Variables for Production and
+Preview, and redeploy. Nothing else about the project needs changing: the
+framework preset, build command and `dist/` output directory are detected.
+
+With the variables unset the script writes nothing and the build still succeeds —
+which is what keeps CI and offline builds green. `public/config.json` is
+gitignored, so a local file made by `make config` is never deployed by accident.
+
+`vercel.json` marks `/config.json` as `no-store`, so repointing a deployment at a
+different Supabase project takes effect on reload instead of after a cache purge.
 
 If the file is absent, the deployment still works — the menu just reports
 challenges as unavailable.
