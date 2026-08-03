@@ -267,3 +267,73 @@ describe('Score lifecycle', () => {
     expect(restore).toBeDefined();
   });
 });
+
+describe('AudioEngine voice stacking', () => {
+  /** An engine wired to a stub graph, as if resume() had run. */
+  function engineOnStub(): {
+    engine: AudioEngine;
+    ctx: ReturnType<typeof stubContext>;
+    state: { voices: unknown[]; fading: unknown[] };
+    advance(seconds: number): void;
+  } {
+    const engine = new AudioEngine(9);
+    const ctx = stubContext();
+    const w = ctx as unknown as { currentTime: number; state: string };
+    w.state = 'running';
+    const priv = engine as unknown as {
+      ctx: unknown;
+      sfxBus: unknown;
+      voices: unknown[];
+      fading: unknown[];
+    };
+    priv.ctx = ctx;
+    priv.sfxBus = ctx.createGain();
+    return {
+      engine,
+      ctx,
+      state: priv as unknown as { voices: unknown[]; fading: unknown[] },
+      advance: (seconds) => {
+        w.currentTime += seconds;
+      },
+    };
+  }
+
+  it('re-articulates a long cue instead of layering it on itself', () => {
+    // 'rune' is a 1.3s voice; three casts half a second apart used to fuse
+    // into one held note for the length of a whole duel.
+    const { engine, state, advance } = engineOnStub();
+    engine.play('rune');
+    expect(state.voices).toHaveLength(1);
+    advance(0.5);
+    engine.play('rune');
+    advance(0.5);
+    engine.play('rune');
+    // Only the newest is still sounding; the others were released.
+    expect(state.voices).toHaveLength(1);
+    expect(state.fading.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('still lets short cues layer, and lets a long cue re-fire once done', () => {
+    const { engine, state, advance } = engineOnStub();
+    // 'ui-click' is percussive — stacking two is correct.
+    engine.play('ui-click');
+    advance(0.01);
+    engine.play('ui-click');
+    expect(state.voices).toHaveLength(2);
+
+    const fresh = engineOnStub();
+    fresh.engine.play('stone-grind');
+    fresh.advance(2.0); // past the 1.4s voice
+    fresh.engine.play('stone-grind');
+    expect(fresh.state.voices).toHaveLength(1);
+    expect(fresh.state.fading).toHaveLength(0);
+  });
+
+  it('leaves different cue names alone', () => {
+    const { engine, state } = engineOnStub();
+    engine.play('stone-grind');
+    engine.play('rune');
+    engine.play('vocal:jotunn');
+    expect(state.voices).toHaveLength(3);
+  });
+});
