@@ -49,7 +49,7 @@ import { createUI } from './ui/index.ts';
 import type { UIHandle } from './ui/index.ts';
 import { SettingsStore } from './ui/settings.ts';
 import { HUD_CSS } from './hudStyles.ts';
-import { SHELL_BAR_ID, createShell, decorateToolbar } from './ui/shell.ts';
+import { SHELL_BAR_ID, createShell, decorateToolbar, playerName } from './ui/shell.ts';
 import type { GameOverSummary } from './ui/shell.ts';
 
 const FACTION = { w: 'ash', b: 'ember' } as const;
@@ -173,6 +173,22 @@ function mountRotatePrompt(): void {
 const SIDE_LABEL: Record<Color, string> = { w: 'Ash', b: 'Ember' };
 const sideLabel = (side: Color): string => SIDE_LABEL[side];
 const other = (side: Color): Color => (side === 'w' ? 'b' : 'w');
+
+/**
+ * PGN wants a date, a site and two player names. The exporter lives in
+ * `src/engine/`, which is pure and headless and may not read a clock, so it
+ * emits the placeholders the format defines for "unknown" and integration fills
+ * them in here, where the wall clock and the players' names actually exist.
+ */
+function pgnDate(d: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`;
+}
+
+/** Tag values are quote-delimited, so quotes and backslashes cannot appear. */
+function pgnTag(value: string): string {
+  return value.replace(/["\\]/g, '').trim() || '?';
+}
 
 function clock(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000));
@@ -368,7 +384,7 @@ function boot(): void {
     },
     loadFEN: (fen) => controller.loadFEN(fen),
     importPGN: (pgn) => controller.importPGN(pgn),
-    exportPGN: () => controller.exportPGN(),
+    exportPGN: () => fillPgnTags(controller.exportPGN()),
     exportFEN: () => controller.exportFEN(),
     subscribe: (fn) => controller.subscribe(fn),
     getState: () => controller.getState(),
@@ -674,6 +690,48 @@ function boot(): void {
    * fall quiet.
    */
   let pendingResult: GameEvent | null = null;
+  /** Names for the PGN when the game was a challenge, captured while it lives. */
+  let onlineNames: { white: string; black: string } | null = null;
+  /** Which side conceded, so the PGN can record a result the engine cannot see. */
+  let resignedBy: Color | null = null;
+
+  function pgnPlayers(): { white: string; black: string } {
+    if (onlineNames) return onlineNames;
+    const mode = lastGameOptions?.mode ?? 'hotseat';
+    if (mode === 'attract') {
+      // The controller gives white the stronger tier in attract mode.
+      return { white: 'Crestfall (jarl)', black: 'Crestfall (karl)' };
+    }
+    if (mode === 'vs-ai') {
+      const human = playerName() || 'Player';
+      const ai = `Crestfall (${lastGameOptions?.aiTier ?? 'karl'})`;
+      return (lastGameOptions?.humanColor ?? 'w') === 'w'
+        ? { white: human, black: ai }
+        : { white: ai, black: human };
+    }
+    return { white: 'Ash', black: 'Ember' };
+  }
+
+  function fillPgnTags(pgn: string): string {
+    const { white, black } = pgnPlayers();
+    let out = pgn
+      .replace('[Site "?"]', `[Site "${pgnTag(location.host || 'local')}"]`)
+      .replace('[Date "????.??.??"]', `[Date "${pgnDate(new Date())}"]`)
+      // "-" is the tag for "does not apply", where "?" means "unknown".
+      .replace('[Round "?"]', '[Round "-"]')
+      .replace('[White "?"]', `[White "${pgnTag(white)}"]`)
+      .replace('[Black "?"]', `[Black "${pgnTag(black)}"]`);
+
+    if (resignedBy) {
+      // The engine sees a legal, playable position and so reports "*". A
+      // concession is a result, and PGN has a tag for saying how it happened.
+      const result = resignedBy === 'w' ? '0-1' : '1-0';
+      out = out
+        .replace(/\[Result "[^"]*"\]/, `[Result "${result}"]\n[Termination "resignation"]`)
+        .replace(/\*(\s*)$/, `${result}$1`);
+    }
+    return out;
+  }
   /**
    * Set when a player concedes. The engine has no notion of resignation — the
    * position is still legal and playable — so the refusal to accept further
@@ -692,6 +750,7 @@ function boot(): void {
     if (resigned || !gameStarted) return;
     resigned = true;
     const side = resigningSide();
+    resignedBy = side;
     const winner = other(side);
     const wasOnline = matchLive;
     // Read before the session is dropped below, or the name is gone.
@@ -805,9 +864,15 @@ function boot(): void {
     matchLive = true;
     opponentIsRemote = true;
     localSide = info.localSide;
+    const them = session?.opponent ?? 'Opponent';
+    onlineNames =
+      info.localSide === 'w'
+        ? { white: info.localName, black: them }
+        : { white: them, black: info.localName };
     gameStartedAt = performance.now();
     gameStarted = true;
     resigned = false;
+    resignedBy = null;
     ensureUI();
     api.newGame({ mode: 'online', seed: info.seed, humanColor: info.localSide });
     armAudio();
@@ -870,6 +935,8 @@ function boot(): void {
       gameStartedAt = performance.now();
       gameStarted = true;
       resigned = false;
+      resignedBy = null;
+      onlineNames = null;
       ensureUI();
       api.newGame(opts);
       armAudio();
@@ -882,6 +949,7 @@ function boot(): void {
       gameStartedAt = performance.now();
       gameStarted = true;
       resigned = false;
+      resignedBy = null;
       ensureUI();
       api.newGame(opts);
       shell.close();

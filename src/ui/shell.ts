@@ -27,6 +27,11 @@ function rememberedName(): string {
   }
 }
 
+/** The name the player last used, for anything that needs to credit them. */
+export function playerName(): string {
+  return rememberedName();
+}
+
 function rememberName(name: string): void {
   try {
     localStorage.setItem(NAME_KEY, name);
