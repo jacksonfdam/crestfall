@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy to public/config.json and fill in. Loaded at runtime, so one build runs against any Supabase project. Without this file the game runs fine and only 'Challenge a friend' is unavailable. The anon key is public by design — it is safe in a browser, and row-level security is what actually protects the data.",
+  "supabaseUrl": "https://your-project.supabase.co",
+  "supabaseAnonKey": "your-anon-key"
+}

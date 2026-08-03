@@ -1,0 +1,46 @@
+# Supabase CLI configuration for local development (`supabase start`).
+# The CLI runs the whole stack (Postgres, Realtime, Auth, Studio) in Docker.
+#
+# Ports are offset from the CLI defaults on purpose: uBomber uses 5432x on
+# this machine, and both stacks need to be able to run at the same time.
+
+project_id = "crestfall"
+
+[api]
+enabled = true
+port = 54421
+schemas = ["public"]
+extra_search_path = ["public"]
+max_rows = 1000
+
+[db]
+port = 54422
+major_version = 15
+
+[studio]
+enabled = true
+port = 54423
+
+[realtime]
+enabled = true
+
+[auth]
+# Challenges are anonymous — a name, nothing more — so no provider is
+# configured. Auth stays enabled only because the anon key is issued by it.
+enabled = true
+site_url = "http://localhost:8080"
+additional_redirect_urls = ["http://localhost:8080", "http://localhost:5173"]
+
+[local_smtp]
+enabled = false
+
+[storage]
+enabled = false
+
+[edge_runtime]
+enabled = false
+
+# Not needed to develop against, and its default port collides with other
+# Supabase projects running on the same machine.
+[analytics]
+enabled = false

@@ -4,3 +4,14 @@ dist/
 .DS_Store
 scratch-*.ts
 .vercel
+
+# Secrets and generated runtime config. The anon key is public-by-design, but
+# the file is environment-specific — commit config.json.example, never this.
+.env
+.env.local
+.env*.local
+public/config.json
+
+# Supabase CLI scratch state
+supabase/.branches
+supabase/.temp

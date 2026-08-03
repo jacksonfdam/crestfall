@@ -208,7 +208,9 @@ export class GameController implements GameApi {
   private isAiTurn(): boolean {
     if (status(this.pos) !== 'active') return false;
     if (this.opts.mode === 'attract') return true;
-    if (this.opts.mode !== 'vs-ai') return false;
+    // 'online' rides the same port as 'vs-ai': the opponent's move arrives from
+    // outside, so the turn belongs to the port either way.
+    if (this.opts.mode !== 'vs-ai' && this.opts.mode !== 'online') return false;
     return this.turn() !== (this.opts.humanColor ?? 'w');
   }
 

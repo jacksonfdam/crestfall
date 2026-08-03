@@ -15,6 +15,11 @@ widen a module's surface beyond what is written here.
    the capture has already happened.
 3. **The AI runs in a Web Worker** (`src/ai/worker.ts`), hard time budget per
    tier, cancellable via a generation counter.
+   **A remote opponent uses the same port.** In an online match the friend's
+   move arrives on the port the AI answers on (`src/net/opponentPort.ts`), so
+   there is still exactly one external write path, one cancellation mechanism,
+   and one guard — `isAiTurn()` — stopping a player moving for their opponent.
+   See `docs/MULTIPLAYER.md`.
 4. **Determinism.** All variation flows from the game seed through
    `src/core/prng.ts` (mulberry32) and `duelVariant()` in the contract. No
    `Math.random`, no `Date.now` inside game/duel logic.
@@ -31,7 +36,9 @@ widen a module's surface beyond what is written here.
 | `src/chars/`   | chars   | core, three |
 | `src/duels/`   | duels   | core, three, chars, render (camera rig API) |
 | `src/audio/`   | audio   | core       |
-| `src/ui/`      | ui      | core, game (read + command API only) |
+| `src/ui/`      | ui      | core, game (read + command API only), net (protocol constants) |
+| `src/net/`     | net     | core (contract + the AI port shape) |
+| `src/main.ts`  | integrator | everything — the only module that wires the rest together |
 
 `src/game/GameController` is the ONLY writer of game state. UI calls its
 command methods (`tryMove`, `undo`, `redo`, `newGame`, `loadFEN`,
@@ -80,4 +87,4 @@ synthesized); move input responds < 50 ms regardless of animation state.
 No Interplay-derived content. No film references in any duel (specifically:
 nothing evoking the Monty Python black-knight scene or the Raiders swordsman
 scene). Homage sources allowed: Norse sagas, Bayeux Tapestry, Poetic Edda,
-medieval marginalia. Engine is our own negamax — no Stockfish, no GPL code.
+medieval marginalia. Engine is our own alpha-beta search — no Stockfish, no GPL code.

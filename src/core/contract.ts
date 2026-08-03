@@ -131,7 +131,13 @@ export const DEFAULT_SETTINGS: Settings = {
 
 // ── Game command surface (implemented by src/game/GameController) ───────────
 
-export type GameMode = 'hotseat' | 'vs-ai' | 'attract';
+/**
+ * `online` is a challenge match against a friend over a link. It behaves
+ * exactly like `vs-ai` from the controller's point of view — one side is
+ * driven from outside, through the same port — so the local player can never
+ * move for the opponent whether that opponent is a search or a person.
+ */
+export type GameMode = 'hotseat' | 'vs-ai' | 'attract' | 'online';
 export type AiTier = 'thrall' | 'karl' | 'jarl' | 'konungr';
 
 export interface NewGameOptions {

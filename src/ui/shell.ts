@@ -12,10 +12,79 @@
  */
 
 import type { AiTier, Color, GameMode, NewGameOptions, Settings } from '../core/contract.ts';
+import { MAX_NAME_LENGTH } from '../net/protocol.ts';
 import { button, el } from './dom.ts';
 import type { SettingsStore } from './settings.ts';
 
-export type ShellScreen = 'menu' | 'new' | 'credits' | 'settings' | 'help';
+/** Remembering the last name used spares repeat players the retyping. */
+const NAME_KEY = 'crestfall.playerName';
+
+function rememberedName(): string {
+  try {
+    return localStorage.getItem(NAME_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function rememberName(name: string): void {
+  try {
+    localStorage.setItem(NAME_KEY, name);
+  } catch {
+    /* private mode; the field just starts empty next time */
+  }
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error && err.message ? err.message : 'Something went wrong.';
+}
+
+export type ShellScreen =
+  | 'menu'
+  | 'new'
+  | 'challenge'
+  | 'join'
+  | 'cast'
+  | 'credits'
+  | 'settings'
+  | 'help'
+  | 'over';
+
+/**
+ * The end of a game, as integration sees it. The shell renders this and knows
+ * nothing about chess: how a result is worded and which statistics are worth
+ * counting are decided where the move history lives.
+ */
+export interface GameOverSummary {
+  /** 'Checkmate', 'Stalemate', 'Draw'. */
+  headline: string;
+  /** 'Ash wins', 'You win', 'Insufficient material'. */
+  outcome: string;
+  /** True for a win, so the wording can be coloured as one. */
+  decisive: boolean;
+  /** Label → value, rendered as a grid of tiles. */
+  stats: [string, string][];
+  fen: string;
+  pgn: string;
+  /** False when a rematch cannot be offered — an online match, for instance. */
+  canRematch: boolean;
+  rematchHint?: string;
+}
+
+/**
+ * Link-based challenges. The shell renders the forms and reports intent; the
+ * net module and integration own every side effect, including deciding when a
+ * match has actually started and the menu should get out of the way.
+ */
+export interface ShellNet {
+  /** False when no Supabase config is present; challenges are then offered as unavailable. */
+  available: boolean;
+  createChallenge(name: string, side: Color): Promise<{ code: string; link: string }>;
+  cancelChallenge(): Promise<void>;
+  joinChallenge(code: string, name: string): Promise<void>;
+  /** Code the player arrived with, when they opened a challenge link. */
+  pendingCode: string | null;
+}
 
 /**
  * Mute is derived state, not stored state: `masterVolume === 0` IS muted, so
@@ -30,8 +99,15 @@ export interface ShellAudio {
 export interface ShellDeps {
   settings: SettingsStore;
   audio: ShellAudio;
+  net: ShellNet;
   /** Start a game with these options and hand the screen back to the board. */
   onStartGame(opts: NewGameOptions): void;
+  /** Play the same setup again, with a fresh seed. */
+  onRematch(): void;
+  /** Concede the game in progress. Integration decides what the result reads as. */
+  onResign(): void;
+  /** True while a game is running and undecided, so resigning is meaningful. */
+  canResign(): boolean;
   /** Menu opened/closed, so integration can hide or show the in-game panel. */
   onVisibilityChange(open: boolean): void;
   /** True once a game is running — gates "Continuar" and Esc-to-close. */
@@ -41,11 +117,19 @@ export interface ShellDeps {
 export interface ShellHandle {
   open(screen?: ShellScreen): void;
   close(): void;
+  /** Present the result. Integration decides when — after the last duel lands. */
+  showGameOver(summary: GameOverSummary): void;
   dispose(): void;
 }
 
 const ROOT_ID = 'cf-shell';
 const BAR_ID = 'cf-shell-bar';
+
+/** Integration measures this to reserve space for it in the HUD strip. */
+export const SHELL_BAR_ID = BAR_ID;
+
+/** One height for everything in the top strip, so nothing looks bolted on. */
+const HUD_ROW_HEIGHT = '2rem';
 
 const MODES: { value: GameMode; label: string; hint: string }[] = [
   {
@@ -75,6 +159,50 @@ const TIERS: { value: AiTier; label: string }[] = [
 const SIDES: { value: Color; label: string }[] = [
   { value: 'w', label: 'Ash (light)' },
   { value: 'b', label: 'Ember (dark)' },
+];
+
+/** The six, in piece order. Readings are the ones docs/DUELS.md fixes. */
+const CAST: { piece: string; name: string; fighting: string }[] = [
+  {
+    piece: 'Pawn',
+    name: 'Huscarl',
+    fighting: 'Spear and shield, workmanlike. Holds the line and thrusts over the rim.',
+  },
+  {
+    piece: 'Knight',
+    name: 'Berserkr',
+    fighting:
+      'Mounted, twin axes, never stopping to trade. The horse is a character too — and it always survives.',
+  },
+  {
+    piece: 'Bishop',
+    name: 'Völva',
+    fighting: 'A seeress. Casts runes from a distance and never closes it.',
+  },
+  {
+    piece: 'Rook',
+    name: 'Jötunn',
+    fighting: 'A standing stone that unfolds into a giant. The unfolding is the wind-up.',
+  },
+  {
+    piece: 'Queen',
+    name: 'Valkyrie',
+    fighting: 'Winged. Every one of her duels leaves the ground.',
+  },
+  {
+    piece: 'King',
+    name: 'Jarl',
+    fighting: 'Heavy and reluctant. Wins by economy, never by flourish.',
+  },
+];
+
+/** What the marks on the board mean. */
+const BOARD_MARKS: [string, string][] = [
+  ['Bright frame', 'The piece you have selected.'],
+  ['Pale dots', 'Every square that piece may legally reach.'],
+  ['Two warm squares', 'Where the last move came from, and where it landed.'],
+  ['Pulsing ring', 'A Jarl in check.'],
+  ['Runes along the rail', "The board's own marginalia. Decoration — they carry no meaning in play."],
 ];
 
 const DEPENDENCIES: [string, string, string][] = [
@@ -114,15 +242,25 @@ const HELP_BOARD: [string, string][] = [
   ['Esc', 'Cancels the current selection. In the menu, steps back one screen.'],
 ];
 
-/** Tooltips for the in-game toolbar, matched on the labels it renders. */
-const TOOLTIPS: [string, string][] = [
-  ['New game', 'Start another game (type, AI level and side)'],
-  ['Undo', 'Take back the last move'],
-  ['Redo', 'Replay the move you took back'],
-  ['View:', 'Switch between the 3D board and the top-down 2D view'],
-  ['Duel speed:', 'Duel speed: 1×, 2× or instant'],
-  ['FEN', 'Copy or load a position (FEN)'],
-  ['PGN', 'Copy or load the game (PGN)'],
+/**
+ * The in-game toolbar, described: a role the HUD stylesheet can select on, and
+ * a tooltip. Matched on the labels the UI module renders, so a control that is
+ * renamed simply keeps its default appearance rather than being mislabelled.
+ */
+const TOOLBAR_CONTROLS: {
+  label: string;
+  role: string;
+  tip: string;
+  /** Replaces the label. The trailing ellipsis reads as truncation on a HUD. */
+  rename?: string;
+}[] = [
+  { label: 'New game', role: 'new-game', tip: 'Start another game (type, AI level and side)' },
+  { label: 'Undo', role: 'undo', tip: 'Take back the last move' },
+  { label: 'Redo', role: 'redo', tip: 'Replay the move you took back' },
+  { label: 'View:', role: 'view', tip: 'Switch between the 3D board and the top-down 2D view' },
+  { label: 'Duel speed:', role: 'speed', tip: 'Duel speed: 1×, 2× or instant' },
+  { label: 'FEN', role: 'fen', tip: 'Copy or load a position (FEN)', rename: 'FEN' },
+  { label: 'PGN', role: 'pgn', tip: 'Copy or load the game (PGN)', rename: 'PGN' },
 ];
 
 /**
@@ -137,18 +275,23 @@ const TOOLTIPS: [string, string][] = [
  * carries the display type; the UI sans keeps the controls legible.
  */
 const CSS = `
-#${ROOT_ID} {
+/* On :root, not on the panel: the floating Menu/Help bar is a sibling of the
+   overlay, and variables scoped to the overlay would resolve to nothing there —
+   which is exactly what made those two buttons look washed out. */
+:root {
   --cf-void: #0b0e14;
   --cf-oak: #241c15;
-  --cf-iron: #3a4150;
+  --cf-iron: #4a4034;
   --cf-bone: #efe8d4;
   --cf-parchment: #a9a294;
   --cf-gold: #d9a441;
-  --cf-focus: #8fc1ee;
-  --cf-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
-    "Hoefler Text", Georgia, "Times New Roman", serif;
+  --cf-focus: #ffe3a3;
+  --cf-display: "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Palatino,
+    "Book Antiqua", Georgia, "Times New Roman", serif;
   --cf-ui: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
 
+#${ROOT_ID} {
   position: fixed;
   inset: 0;
   z-index: 8000;
@@ -230,7 +373,9 @@ const CSS = `
   text-transform: uppercase;
   color: var(--cf-gold);
 }
-#${ROOT_ID} h3:first-of-type { margin-top: 0; }
+/* No :first-of-type reset here. On the result screen the first h3 follows the
+   action buttons, and zeroing its top margin collapses it onto them. Adjacent
+   margins collapse anyway, so the h2 above never doubles up. */
 #${ROOT_ID} p {
   margin: 0 0 0.7rem;
   line-height: 1.55;
@@ -254,6 +399,47 @@ const CSS = `
   background: linear-gradient(180deg, rgba(217,164,65,0.14), rgba(217,164,65,0.05));
   border-color: rgba(217,164,65,0.5);
 }
+/* Resigning should be reachable, not prominent. */
+#${ROOT_ID} .cf-shell-nav button.cf-quiet {
+  font-size: 0.95rem;
+  color: var(--cf-parchment);
+  background: none;
+  border-color: rgba(239, 232, 212, 0.12);
+}
+#${ROOT_ID} .cf-shell-nav button.cf-quiet:hover {
+  color: #f0bfae;
+  border-color: rgba(200, 98, 74, 0.55);
+  background: rgba(200, 98, 74, 0.08);
+}
+#${ROOT_ID} .cf-shell-confirm {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(200, 98, 74, 0.45);
+  border-radius: 3px;
+  background: rgba(200, 98, 74, 0.08);
+  font-size: 0.88rem;
+  color: var(--cf-bone);
+}
+#${ROOT_ID} .cf-shell-confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+#${ROOT_ID} .cf-shell-confirm-actions button {
+  flex: 1 1 auto;
+  font-family: var(--cf-ui);
+  font-size: 0.85rem;
+  text-transform: none;
+  letter-spacing: 0;
+  text-align: center;
+  padding: 0.4rem 0.7rem;
+}
+#${ROOT_ID} button.cf-danger {
+  border-color: #c8624a;
+  color: #f7d9cf;
+  background: rgba(200, 98, 74, 0.2);
+}
+#${ROOT_ID} button.cf-danger:hover { background: rgba(200, 98, 74, 0.32); }
+
 #${ROOT_ID} .cf-shell-nav button.cf-primary {
   border-color: var(--cf-gold);
   color: #f7ecd2;
@@ -276,6 +462,11 @@ const CSS = `
   outline: 3px solid var(--cf-focus);
   outline-offset: 2px;
 }
+/* The panel takes focus so reading screens start at the top; it is a container,
+   not a control, so it does not draw a focus ring of its own. Every actual
+   control still does. */
+#${ROOT_ID} .cf-shell-panel:focus,
+#${ROOT_ID} .cf-shell-panel:focus-visible { outline: none; }
 
 #${ROOT_ID} fieldset {
   margin: 0 0 1.2rem;
@@ -336,10 +527,69 @@ const CSS = `
   padding: 0.32rem 0.45rem;
   accent-color: var(--cf-gold);
 }
-#${ROOT_ID} .cf-shell-row input[type='checkbox'] {
+/* A native checkbox is the one control the platform paints in its own colours,
+   which puts a stock blue-grey square in the middle of a gilt panel. Drawn here
+   instead, with the tick as a clip-path so it needs no glyph. */
+#${ROOT_ID} input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
   width: 1.15rem;
   height: 1.15rem;
-  accent-color: var(--cf-gold);
+  margin: 0;
+  border: 1px solid var(--cf-iron);
+  border-radius: 2px;
+  background: #191510;
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+}
+#${ROOT_ID} input[type='checkbox']::before {
+  content: '';
+  width: 0.66rem;
+  height: 0.66rem;
+  transform: scale(0);
+  background: var(--cf-gold);
+  clip-path: polygon(14% 44%, 0 58%, 43% 100%, 100% 16%, 86% 0, 43% 71%);
+}
+#${ROOT_ID} input[type='checkbox']:checked { border-color: var(--cf-gold); }
+#${ROOT_ID} input[type='checkbox']:checked::before { transform: scale(1); }
+#${ROOT_ID} input[type='checkbox']:hover { border-color: var(--cf-parchment); }
+#${ROOT_ID} .cf-shell-row input[type='text'] {
+  font-family: var(--cf-ui);
+  font-size: 0.92rem;
+  min-width: 190px;
+  color: var(--cf-bone);
+  background: #191510;
+  border: 1px solid var(--cf-iron);
+  border-radius: 3px;
+  padding: 0.4rem 0.5rem;
+}
+
+/* The invite link: monospace so a mistyped character is visible, and always
+   fully selectable for people whose clipboard permission is refused. */
+#${ROOT_ID} .cf-shell-link {
+  width: 100%;
+  margin: 0.2rem 0 0.9rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86rem;
+  color: var(--cf-bone);
+  background: #191510;
+  border: 1px solid var(--cf-gold);
+  border-radius: 3px;
+  padding: 0.55rem 0.6rem;
+}
+#${ROOT_ID} .cf-shell-waiting {
+  margin: 0;
+  color: var(--cf-gold);
+  font-size: 0.86rem;
+}
+#${ROOT_ID} .cf-shell-error {
+  margin: 0.6rem 0 0;
+  padding: 0.5rem 0.6rem;
+  border-left: 3px solid #c8624a;
+  background: rgba(200,98,74,0.1);
+  color: #f0bfae;
+  font-size: 0.86rem;
 }
 
 #${ROOT_ID} .cf-shell-actions {
@@ -377,6 +627,109 @@ const CSS = `
   color: var(--cf-bone);
   letter-spacing: 0.06em;
 }
+/* ── Result screen ───────────────────────────────────────────────────────── */
+
+#${ROOT_ID} .cf-shell-headline {
+  margin-bottom: 0.2rem;
+  padding-bottom: 0;
+  border-bottom: 0;
+  font-size: 1.3rem;
+  color: var(--cf-parchment);
+}
+#${ROOT_ID} .cf-shell-outcome {
+  margin: 0 0 1.2rem;
+  font-family: var(--cf-display);
+  font-size: clamp(1.8rem, 4.5vw, 2.5rem);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cf-bone);
+  line-height: 1.1;
+}
+#${ROOT_ID} .cf-shell-outcome.cf-won {
+  color: var(--cf-gold);
+  text-shadow: 0 0 30px rgba(217, 164, 65, 0.22);
+}
+
+#${ROOT_ID} .cf-shell-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.45rem;
+}
+#${ROOT_ID} .cf-shell-stat {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid rgba(239, 232, 212, 0.12);
+  border-radius: 3px;
+  background: rgba(239, 232, 212, 0.03);
+}
+#${ROOT_ID} .cf-shell-stat span {
+  display: block;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8b8577;
+}
+#${ROOT_ID} .cf-shell-stat strong {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--cf-display);
+  font-size: 1.15rem;
+  color: var(--cf-bone);
+}
+
+#${ROOT_ID} .cf-shell-export { margin-bottom: 0.7rem; }
+#${ROOT_ID} .cf-shell-export-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+#${ROOT_ID} .cf-shell-export-head label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #8b8577;
+}
+#${ROOT_ID} button.cf-shell-copy { padding: 0.2rem 0.55rem; font-size: 0.76rem; }
+#${ROOT_ID} textarea.cf-shell-link { resize: vertical; line-height: 1.45; }
+#${ROOT_ID} .cf-shell-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The two houses, shown rather than described: the swatches are the actual
+   faction values, so the greyscale claim beside them can be checked by eye. */
+#${ROOT_ID} .cf-shell-houses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-bottom: 0.9rem;
+}
+#${ROOT_ID} .cf-shell-house {
+  flex: 1 1 12rem;
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(239, 232, 212, 0.12);
+  border-radius: 3px;
+}
+#${ROOT_ID} .cf-shell-house strong {
+  display: block;
+  font-family: var(--cf-display);
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+#${ROOT_ID} .cf-shell-swatch {
+  flex: 0 0 auto;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 1px solid rgba(239, 232, 212, 0.28);
+  border-radius: 2px;
+}
+
 #${ROOT_ID} table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
 #${ROOT_ID} th, #${ROOT_ID} td {
   text-align: left;
@@ -395,14 +748,57 @@ const CSS = `
 
 #${BAR_ID} {
   position: fixed;
-  top: 0.85rem;
-  left: 0.85rem;
+  /* Sits on the HUD strip's own row; integration reserves the width. */
+  top: 0.4rem;
+  left: 0.6rem;
   z-index: 7000;
   display: flex;
-  gap: 0.4rem;
+  gap: 0.35rem;
 }
 #${BAR_ID}[hidden] { display: none; }
-#${BAR_ID} button { background: rgba(36,28,21,0.88); backdrop-filter: blur(6px); }
+/* These sit over the board next to the in-game toolbar, so they carry the same
+   weight as its buttons rather than receding into the scene. */
+#${BAR_ID} button {
+  box-sizing: border-box;
+  height: ${HUD_ROW_HEIGHT};
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.7rem;
+  border-radius: 3px;
+  background: rgba(30, 26, 21, 0.92);
+  border-color: #5a4c3c;
+  color: #e9e6dc;
+  font-size: 0.85rem;
+  font-weight: 600;
+  backdrop-filter: blur(6px);
+}
+#${BAR_ID} button:hover { background: rgba(46, 38, 29, 0.95); border-color: var(--cf-gold); }
+
+/* Landscape phones are wide but very short, so the display scale has to come
+   down or the menu spills past the fold. */
+@media (max-height: 540px) {
+  #${ROOT_ID} { padding: 0.55rem; }
+  #${ROOT_ID} .cf-shell-panel { padding: 0.9rem 1.1rem 1rem; max-height: 95dvh; }
+  #${ROOT_ID} h1 { font-size: 1.55rem; letter-spacing: 0.14em; }
+  #${ROOT_ID} .cf-shell-sub { font-size: 0.8rem; margin-bottom: 0.75rem; }
+  #${ROOT_ID} h2 {
+    font-size: 1.05rem;
+    margin-bottom: 0.7rem;
+    padding-bottom: 0.35rem;
+  }
+  #${ROOT_ID} h3 { margin: 0.85rem 0 0.35rem; }
+  #${ROOT_ID} p { font-size: 0.82rem; margin-bottom: 0.5rem; }
+  #${ROOT_ID} .cf-shell-nav { gap: 0.3rem; }
+  #${ROOT_ID} .cf-shell-nav button { padding: 0.45rem 0.75rem; font-size: 0.92rem; }
+  #${ROOT_ID} .cf-shell-choice { padding: 0.35rem 0.5rem; font-size: 0.86rem; }
+  #${ROOT_ID} .cf-shell-row { padding: 0.35rem 0; font-size: 0.86rem; }
+  #${ROOT_ID} .cf-shell-actions { margin-top: 0.85rem; }
+  #${ROOT_ID} .cf-shell-actions button { font-size: 0.9rem; padding: 0.5rem 0.8rem; }
+  #${ROOT_ID} dl { font-size: 0.82rem; }
+  #${ROOT_ID} dt { margin-top: 0.55rem; }
+  #${BAR_ID} { top: 0.45rem; left: 0.45rem; }
+  #${BAR_ID} button { padding: 0.35rem 0.6rem; font-size: 0.8rem; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   #${ROOT_ID} .cf-shell-panel { animation: none; }
@@ -417,14 +813,18 @@ function randomSeed(): number {
 }
 
 /**
- * Explain the in-game toolbar in place. Matched on the labels the UI module
- * renders, so an unmatched control is left alone rather than mislabelled.
+ * Tag and explain the in-game toolbar in place: `data-cf-role` is what the HUD
+ * stylesheet uses to decide which controls belong on screen during a match, and
+ * the title is the plain-language explanation of each one.
  */
-export function applyToolbarTooltips(mount: HTMLElement): void {
+export function decorateToolbar(mount: HTMLElement): void {
   for (const control of mount.querySelectorAll('button, select')) {
     const text = control.textContent ?? '';
-    const hit = TOOLTIPS.find(([label]) => text.startsWith(label));
-    if (hit && !control.getAttribute('title')) control.setAttribute('title', hit[1]);
+    const hit = TOOLBAR_CONTROLS.find((c) => text.startsWith(c.label));
+    if (!hit) continue;
+    control.setAttribute('data-cf-role', hit.role);
+    if (hit.rename && control.textContent !== hit.rename) control.textContent = hit.rename;
+    if (!control.getAttribute('title')) control.setAttribute('title', hit.tip);
   }
   const duels = mount.querySelector('#cf-duels');
   duels?.setAttribute('title', 'Animate duels only for the first N moves of the game');
@@ -451,6 +851,9 @@ export function createShell(deps: ShellDeps): ShellHandle {
       role: 'dialog',
       'aria-modal': 'true',
       'aria-labelledby': 'cf-shell-title',
+      // Focusable so a reading screen can put the caret at the top of the text
+      // rather than on the Back button at the bottom.
+      tabindex: '-1',
     },
     [body],
   );
@@ -467,6 +870,30 @@ export function createShell(deps: ShellDeps): ShellHandle {
   document.body.append(root, bar);
 
   let screen: ShellScreen = 'menu';
+
+  interface ChallengeState {
+    name: string;
+    side: Color;
+    /** Set once the invite exists; the screen then shows the link and waits. */
+    link: string | null;
+    error: string | null;
+    busy: boolean;
+    copied: boolean;
+  }
+  const freshChallenge = (): ChallengeState => ({
+    name: rememberedName(),
+    side: 'w',
+    link: null,
+    error: null,
+    busy: false,
+    copied: false,
+  });
+  /** Survives re-renders; render() rebuilds the DOM, not the entered values. */
+  let challenge = freshChallenge();
+  /** The result being presented, if any. */
+  let over: GameOverSummary | null = null;
+  /** Resigning asks once; the question lives on the menu, not in a dialog. */
+  let confirmingResign = false;
 
   // ── Small builders ────────────────────────────────────────────────────────
 
@@ -558,6 +985,23 @@ export function createShell(deps: ShellDeps): ShellHandle {
     return button('Back', () => open('menu'));
   }
 
+  function textRow(
+    label: string,
+    value: string,
+    onInput: (v: string) => void,
+    id: string,
+    attrs: Record<string, string> = {},
+  ): HTMLElement {
+    const input = el('input', { type: 'text', autocomplete: 'nickname', ...attrs });
+    input.value = value;
+    input.addEventListener('input', () => onInput(input.value));
+    return row(label, input, id);
+  }
+
+  function errorLine(text: string): HTMLElement {
+    return el('p', { class: 'cf-shell-error', role: 'alert' }, [text]);
+  }
+
   // ── Screens ───────────────────────────────────────────────────────────────
 
   function renderMenu(): void {
@@ -567,10 +1011,47 @@ export function createShell(deps: ShellDeps): ShellHandle {
     }
     nav.append(
       button('New game', () => open('new'), deps.hasGame() ? {} : { class: 'cf-primary' }),
+      button('Challenge a friend', () => open('challenge'), {
+        title: deps.net.available
+          ? 'Create a link that starts a game with a friend'
+          : 'Needs a Supabase connection — see docs/LOCAL_DEVELOPMENT.md',
+      }),
+      button('World & cast', () => open('cast'), {
+        title: 'The setting, the two houses, the six characters and the board marks',
+      }),
       button('Credits', () => open('credits')),
       button('Settings', () => open('settings')),
       button('Help', () => open('help')),
     );
+
+    // Conceding is irreversible, so it asks once. The confirmation replaces the
+    // entry in place rather than opening a dialog over a dialog.
+    if (deps.canResign()) {
+      if (confirmingResign) {
+        nav.append(
+          el('div', { class: 'cf-shell-confirm' }, [
+            el('span', {}, ['Resign the game? The result will stand.']),
+            el('div', { class: 'cf-shell-confirm-actions' }, [
+              button('Yes, resign', () => {
+                confirmingResign = false;
+                deps.onResign();
+              }, { class: 'cf-danger' }),
+              button('Keep playing', () => {
+                confirmingResign = false;
+                render();
+              }),
+            ]),
+          ]),
+        );
+      } else {
+        nav.append(
+          button('Resign', () => {
+            confirmingResign = true;
+            render();
+          }, { class: 'cf-quiet' }),
+        );
+      }
+    }
     body.append(
       ...title('Crestfall', 'Chess where every capture is a duel'),
       nav,
@@ -649,6 +1130,149 @@ export function createShell(deps: ShellDeps): ShellHandle {
         ),
         backButton(),
       ),
+    );
+  }
+
+  /** A read-only field plus a copy button, for text meant to be taken away. */
+  function copyField(label: string, value: string, rows: number): HTMLElement {
+    const id = `cf-shell-export-${label.toLowerCase()}`;
+    const field =
+      rows > 1
+        ? el('textarea', { id, class: 'cf-shell-link', readonly: 'readonly', rows: String(rows) })
+        : el('input', { id, class: 'cf-shell-link', type: 'text', readonly: 'readonly' });
+    (field as HTMLInputElement | HTMLTextAreaElement).value = value;
+    const status = el('span', { class: 'cf-shell-hint', role: 'status' });
+    return el('div', { class: 'cf-shell-export' }, [
+      el('div', { class: 'cf-shell-export-head' }, [
+        el('label', { for: id }, [label]),
+        button(
+          'Copy',
+          () => {
+            navigator.clipboard.writeText(value).then(
+              () => {
+                status.textContent = 'Copied.';
+              },
+              () => {
+                status.textContent = 'Select the text and copy it manually.';
+                (field as HTMLInputElement | HTMLTextAreaElement).select();
+              },
+            );
+          },
+          { class: 'cf-shell-copy' },
+        ),
+        status,
+      ]),
+      field,
+    ]);
+  }
+
+  function renderGameOver(): void {
+    const s = over;
+    if (!s) {
+      open('menu');
+      return;
+    }
+
+    const stats = el('div', { class: 'cf-shell-stats' });
+    for (const [label, value] of s.stats) {
+      stats.append(
+        el('div', { class: 'cf-shell-stat' }, [
+          el('span', {}, [label]),
+          el('strong', {}, [value]),
+        ]),
+      );
+    }
+
+    const rematch = button(
+      'Rematch',
+      () => {
+        over = null;
+        deps.onRematch();
+      },
+      { class: 'cf-primary' },
+    );
+    if (!s.canRematch) {
+      rematch.disabled = true;
+      if (s.rematchHint) rematch.title = s.rematchHint;
+    }
+
+    body.append(
+      el('h2', { id: 'cf-shell-title', class: 'cf-shell-headline' }, [s.headline]),
+      el('p', { class: s.decisive ? 'cf-shell-outcome cf-won' : 'cf-shell-outcome' }, [s.outcome]),
+      stats,
+      actions(
+        rematch,
+        button('Main menu', () => {
+          over = null;
+          open('menu');
+        }),
+      ),
+    );
+    if (!s.canRematch && s.rematchHint) {
+      body.append(el('p', { class: 'cf-shell-hint' }, [s.rematchHint]));
+    }
+    body.append(
+      el('h3', {}, ['Take the game with you']),
+      copyField('FEN', s.fen, 1),
+      copyField('PGN', s.pgn, 6),
+    );
+  }
+
+  function renderCast(): void {
+    const cast = el('table', {}, [
+      el('thead', {}, [
+        el('tr', {}, [el('th', {}, ['Piece']), el('th', {}, ['Character']), el('th', {}, ['Way of fighting'])]),
+      ]),
+    ]);
+    const body2 = el('tbody', {});
+    for (const c of CAST) {
+      body2.append(
+        el('tr', {}, [el('td', {}, [c.piece]), el('td', {}, [c.name]), el('td', {}, [c.fighting])]),
+      );
+    }
+    cast.append(body2);
+
+    const house = (name: string, blurb: string, swatch: string): HTMLElement =>
+      el('div', { class: 'cf-shell-house' }, [
+        el('span', { class: 'cf-shell-swatch', style: `background:${swatch}`, 'aria-hidden': 'true' }),
+        el('div', {}, [el('strong', {}, [name]), el('span', { class: 'cf-shell-hint' }, [blurb])]),
+      ]);
+
+    body.append(
+      heading('World & cast'),
+      el('h3', {}, ['The world']),
+      el('p', {}, [
+        'Chess played by a Norse warband. The rules never bend — but a capture ' +
+          'is not a piece lifted off a square. It is two figures meeting, and ' +
+          'only one of them walking away.',
+      ]),
+      el('p', {}, [
+        'Nothing here is borrowed. The cast, the heraldry and every duel were ' +
+          'designed for this project, drawn from saga matter, the Bayeux ' +
+          'Tapestry and the marginalia of medieval manuscripts.',
+      ]),
+      el('h3', {}, ['The two houses']),
+      el('div', { class: 'cf-shell-houses' }, [
+        house('Ash', 'Pale birch, bone and bright steel.', '#e6dfcb'),
+        house('Ember', 'Charred oak and black iron, lit faintly from within.', '#2c211a'),
+      ]),
+      el('p', {}, [
+        'Ash and Ember stand in for white and black, and they are separated by ' +
+          'lightness rather than hue — so the board stays readable in greyscale ' +
+          'and to a colour-blind eye.',
+      ]),
+      el('h3', {}, ['The cast']),
+      cast,
+      el('p', {}, [
+        'Defeat is defeat, not butchery. A huscarl’s shield fails and he ' +
+          'kneels; a berserkr is unhorsed; a völva’s staff breaks and her hood ' +
+          'collapses as if empty; a jötunn cracks along its seams and sinks into ' +
+          'rubble; a valkyrie is brought out of the air and folds her wings; a ' +
+          'jarl plants his greatsword and slumps against it.',
+      ]),
+      el('h3', {}, ['Reading the board']),
+      definitions(BOARD_MARKS),
+      actions(backButton()),
     );
   }
 
@@ -768,23 +1392,228 @@ export function createShell(deps: ShellDeps): ShellHandle {
     );
   }
 
+  function renderChallenge(): void {
+    body.append(heading('Challenge a friend'));
+
+    if (!deps.net.available) {
+      body.append(
+        el('p', {}, [
+          'Challenges need a Supabase connection, and this build has none ' +
+            'configured. See docs/LOCAL_DEVELOPMENT.md to point it at a project.',
+        ]),
+        actions(backButton()),
+      );
+      return;
+    }
+
+    if (challenge.link) {
+      const field = el('input', {
+        type: 'text',
+        readonly: 'readonly',
+        class: 'cf-shell-link',
+        'aria-label': 'Challenge link',
+      });
+      field.value = challenge.link;
+      const status = el('p', { class: 'cf-shell-waiting', role: 'status' }, [
+        challenge.copied ? 'Link copied. Waiting for them to join…' : 'Waiting for them to join…',
+      ]);
+      body.append(
+        el('p', {}, [
+          'Send this link to your friend. It can be claimed once, and only ' +
+            'within the next 15 minutes. They will not need an account — just a name.',
+        ]),
+        field,
+        status,
+        actions(
+          button(
+            'Copy link',
+            () => {
+              const link = challenge.link ?? '';
+              navigator.clipboard.writeText(link).then(
+                () => {
+                  challenge.copied = true;
+                  status.textContent = 'Link copied. Waiting for them to join…';
+                },
+                () => {
+                  status.textContent = 'Could not copy — select the link and copy it manually.';
+                  field.select();
+                },
+              );
+            },
+            { class: 'cf-primary' },
+          ),
+          button('Cancel', () => {
+            void deps.net.cancelChallenge();
+            challenge = freshChallenge();
+            open('menu');
+          }),
+        ),
+      );
+      return;
+    }
+
+    const nameInput = textRow(
+      'Your name',
+      challenge.name,
+      (v) => {
+        challenge.name = v;
+      },
+      'cf-shell-host-name',
+      { maxlength: String(MAX_NAME_LENGTH), placeholder: 'Shown to your friend' },
+    );
+
+    const sideFields = el('fieldset', {}, [el('legend', {}, ['You play'])]);
+    for (const sd of SIDES) {
+      sideFields.append(
+        choice(
+          'cf-shell-host-side',
+          sd.value,
+          sd.label,
+          undefined,
+          sd.value === challenge.side,
+          () => {
+            challenge.side = sd.value;
+          },
+        ).wrap,
+      );
+    }
+
+    body.append(
+      el('p', {}, [
+        'Create a link, send it to a friend, and the game starts as soon as ' +
+          'they open it. No account, no sign-up — you each just type a name.',
+      ]),
+      nameInput,
+      sideFields,
+    );
+    if (challenge.error) body.append(errorLine(challenge.error));
+    body.append(
+      actions(
+        button(
+          challenge.busy ? 'Creating…' : 'Create link',
+          () => {
+            if (challenge.busy) return;
+            const name = challenge.name.trim();
+            if (!name) {
+              challenge.error = 'Enter a name first.';
+              render();
+              return;
+            }
+            challenge.busy = true;
+            challenge.error = null;
+            render();
+            deps.net.createChallenge(name, challenge.side).then(
+              ({ link }) => {
+                rememberName(name);
+                challenge.busy = false;
+                challenge.link = link;
+                render();
+              },
+              (err: unknown) => {
+                challenge.busy = false;
+                challenge.error = messageOf(err);
+                render();
+              },
+            );
+          },
+          { class: 'cf-primary' },
+        ),
+        backButton(),
+      ),
+    );
+  }
+
+  function renderJoin(): void {
+    const code = deps.net.pendingCode;
+    body.append(heading('A challenge awaits'));
+
+    if (!code) {
+      body.append(
+        el('p', {}, ['That challenge link is not valid.']),
+        actions(button('To the menu', () => open('menu'))),
+      );
+      return;
+    }
+
+    body.append(
+      el('p', {}, [
+        'Someone has challenged you to a duel. Enter a name to accept — no ' +
+          'account needed. Links expire 15 minutes after they are created.',
+      ]),
+      textRow(
+        'Your name',
+        challenge.name,
+        (v) => {
+          challenge.name = v;
+        },
+        'cf-shell-guest-name',
+        { maxlength: String(MAX_NAME_LENGTH), placeholder: 'Shown to your opponent' },
+      ),
+    );
+    if (challenge.error) body.append(errorLine(challenge.error));
+    body.append(
+      actions(
+        button(
+          challenge.busy ? 'Joining…' : 'Accept',
+          () => {
+            if (challenge.busy) return;
+            const name = challenge.name.trim();
+            if (!name) {
+              challenge.error = 'Enter a name first.';
+              render();
+              return;
+            }
+            challenge.busy = true;
+            challenge.error = null;
+            render();
+            deps.net.joinChallenge(code, name).then(
+              () => {
+                rememberName(name);
+                challenge.busy = false;
+              },
+              (err: unknown) => {
+                challenge.busy = false;
+                challenge.error = messageOf(err);
+                render();
+              },
+            );
+          },
+          { class: 'cf-primary' },
+        ),
+        button('Play alone instead', () => open('menu')),
+      ),
+    );
+  }
+
+  /** Screens that are prose to be read, not a form to be filled. */
+  const READING_SCREENS = new Set<ShellScreen>(['cast', 'credits', 'help']);
+
   const SCREENS: Record<ShellScreen, () => void> = {
     menu: renderMenu,
     new: renderNewGame,
+    challenge: renderChallenge,
+    join: renderJoin,
+    cast: renderCast,
     credits: renderCredits,
     settings: renderSettings,
     help: renderHelp,
+    over: renderGameOver,
   };
 
   function render(): void {
     body.replaceChildren();
     SCREENS[screen]();
-    const first = panel.querySelector<HTMLElement>(
-      'button, select, input:not([type="hidden"])',
-    );
-    // preventScroll matters on the long screens: focusing normally scrolls the
-    // control into view and the heading disappears above the fold.
-    first?.focus({ preventScroll: true });
+    if (READING_SCREENS.has(screen)) {
+      // On a screen that is text with a Back button at the end, focusing that
+      // button drags the panel to the bottom — browsers scroll focus into view
+      // on a later frame, so preventScroll does not save us. Focus the panel
+      // instead: the reader starts at the top and tabs on from there.
+      panel.focus({ preventScroll: true });
+    } else {
+      panel.querySelector<HTMLElement>('button, select, input:not([type="hidden"])')?.focus({
+        preventScroll: true,
+      });
+    }
     panel.scrollTop = 0;
   }
 
@@ -820,6 +1649,10 @@ export function createShell(deps: ShellDeps): ShellHandle {
   return {
     open,
     close,
+    showGameOver(summary: GameOverSummary): void {
+      over = summary;
+      open('over');
+    },
     dispose(): void {
       document.removeEventListener('keydown', onKeyDown);
       root.remove();

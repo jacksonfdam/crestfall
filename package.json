@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "node scripts/write-runtime-config.mjs && tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -22,6 +22,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.0",
     "@vercel/analytics": "^2.0.1",
     "three": "^0.185.1"
   }
