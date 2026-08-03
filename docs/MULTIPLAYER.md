@@ -36,19 +36,27 @@ game that runs as long as both players keep playing; an unclaimed one dies after
 
 It is enforced in the database, not the client. The read policy is
 `using (expires_at > now())`, so an expired row is invisible and unclaimable —
-a client that ignores timestamps still cannot use a stale link. Verified:
+a client that ignores timestamps still cannot use a stale link.
+
+Insert is granted per column (`code, host_name, host_side, seed`) and update per
+column (`status, guest_name`), so the expiry window and the shared seed are not
+client-writable. The migration also revokes the blanket privileges Supabase
+grants `anon` by default, so the table's reachable surface is exactly
+`SELECT` + those two column sets — no `DELETE`, no `TRUNCATE`. Verified:
 
 | Attempt (as `anon`)                    | Result                        |
 |----------------------------------------|-------------------------------|
 | create an invite                       | allowed                       |
+| claim a live invite                    | allowed (`status`, `guest_name`) |
+| insert with a forged `expires_at`      | denied                        |
+| rewrite `seed`                         | denied                        |
+| delete a row                           | denied                        |
 | read an expired invite                 | not found                     |
-| claim an expired invite                | 0 rows changed, stays `open`  |
-| insert with a forged `expires_at`      | permission denied             |
-| rewrite `seed` on a live invite        | permission denied             |
+| claim an expired invite                | 0 rows changed                |
 
-Insert is granted per column (`code, host_name, host_side, seed`) and update per
-column (`status, guest_name`), so the expiry window and the shared seed are not
-client-writable. See `supabase/migrations/`.
+See `supabase/migrations/`. Because the hosted project's migration history
+belongs to uBomber, that file is applied by hand there and is written to be
+idempotent — see `docs/DEPLOYMENT.md`.
 
 Expired rows are kept for an hour so a player who arrives late gets "this link
 has expired" rather than a bare not-found, then

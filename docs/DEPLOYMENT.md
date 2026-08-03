@@ -52,18 +52,44 @@ The anon key is meant to be public; it identifies the project, and row-level
 security is the actual access control. Never ship the service-role key to a
 browser.
 
-## Supabase project
+## Supabase project — shared with uBomber
 
-Apply the migrations:
+Crestfall and uBomber share one Supabase instance. Crestfall's tables are
+prefixed `crestfall_` so nothing collides, but the *migration history* cannot be
+shared: `supabase_migrations.schema_migrations` is a single table per project,
+and uBomber owns it.
 
-```sh
-supabase link --project-ref <ref>
-supabase db push
+So on the hosted project, **do not use `supabase db push`**. It will report
+
+```
+Remote migration versions not found in local migrations directory.
 ```
 
-This project shares its Supabase instance with uBomber, which owns the
-unprefixed `rooms` table. Crestfall's tables are prefixed `crestfall_` so the
-two can coexist in one database.
+because uBomber's migrations are recorded there and absent here. Apply the
+schema directly instead:
+
+```sh
+export SUPABASE_DB_URL='postgresql://postgres.<ref>:<password>@<host>:5432/postgres'
+make db-apply-shared
+```
+
+The connection string is in Dashboard → Project Settings → Database. The SQL is
+written to be idempotent, so running this again after a schema change is normal
+and safe — that is the mechanism replacing migration history here.
+
+> **Never run these against the shared project:**
+>
+> - `supabase migration repair --status reverted 20260730000000` — the CLI
+>   suggests it, but it rewrites the shared history and would make uBomber's next
+>   `db push` try to re-apply its own init migration.
+> - `supabase db pull` — it would write uBomber's schema into this repo's
+>   `supabase/migrations/`.
+>
+> `supabase link` is still fine, and `make db-start` / `make db-reset` are
+> unaffected: the local stack is this project's own and has no shared history.
+
+If Crestfall ever gets its own Supabase project, delete this section and the
+`db-apply-shared` target — `supabase db push` then works as normal.
 
 ### Scheduled cleanup
 
