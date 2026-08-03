@@ -44,6 +44,7 @@ export type ShellScreen =
   | 'new'
   | 'challenge'
   | 'join'
+  | 'cast'
   | 'credits'
   | 'settings'
   | 'help';
@@ -128,6 +129,50 @@ const TIERS: { value: AiTier; label: string }[] = [
 const SIDES: { value: Color; label: string }[] = [
   { value: 'w', label: 'Ash (light)' },
   { value: 'b', label: 'Ember (dark)' },
+];
+
+/** The six, in piece order. Readings are the ones docs/DUELS.md fixes. */
+const CAST: { piece: string; name: string; fighting: string }[] = [
+  {
+    piece: 'Pawn',
+    name: 'Huscarl',
+    fighting: 'Spear and shield, workmanlike. Holds the line and thrusts over the rim.',
+  },
+  {
+    piece: 'Knight',
+    name: 'Berserkr',
+    fighting:
+      'Mounted, twin axes, never stopping to trade. The horse is a character too — and it always survives.',
+  },
+  {
+    piece: 'Bishop',
+    name: 'Völva',
+    fighting: 'A seeress. Casts runes from a distance and never closes it.',
+  },
+  {
+    piece: 'Rook',
+    name: 'Jötunn',
+    fighting: 'A standing stone that unfolds into a giant. The unfolding is the wind-up.',
+  },
+  {
+    piece: 'Queen',
+    name: 'Valkyrie',
+    fighting: 'Winged. Every one of her duels leaves the ground.',
+  },
+  {
+    piece: 'King',
+    name: 'Jarl',
+    fighting: 'Heavy and reluctant. Wins by economy, never by flourish.',
+  },
+];
+
+/** What the marks on the board mean. */
+const BOARD_MARKS: [string, string][] = [
+  ['Bright frame', 'The piece you have selected.'],
+  ['Pale dots', 'Every square that piece may legally reach.'],
+  ['Two warm squares', 'Where the last move came from, and where it landed.'],
+  ['Pulsing ring', 'A Jarl in check.'],
+  ['Runes along the rail', "The board's own marginalia. Decoration — they carry no meaning in play."],
 ];
 
 const DEPENDENCIES: [string, string, string][] = [
@@ -344,6 +389,11 @@ const CSS = `
   outline: 3px solid var(--cf-focus);
   outline-offset: 2px;
 }
+/* The panel takes focus so reading screens start at the top; it is a container,
+   not a control, so it does not draw a focus ring of its own. Every actual
+   control still does. */
+#${ROOT_ID} .cf-shell-panel:focus,
+#${ROOT_ID} .cf-shell-panel:focus-visible { outline: none; }
 
 #${ROOT_ID} fieldset {
   margin: 0 0 1.2rem;
@@ -482,6 +532,38 @@ const CSS = `
   color: var(--cf-bone);
   letter-spacing: 0.06em;
 }
+/* The two houses, shown rather than described: the swatches are the actual
+   faction values, so the greyscale claim beside them can be checked by eye. */
+#${ROOT_ID} .cf-shell-houses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-bottom: 0.9rem;
+}
+#${ROOT_ID} .cf-shell-house {
+  flex: 1 1 12rem;
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(239, 232, 212, 0.12);
+  border-radius: 3px;
+}
+#${ROOT_ID} .cf-shell-house strong {
+  display: block;
+  font-family: var(--cf-display);
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+#${ROOT_ID} .cf-shell-swatch {
+  flex: 0 0 auto;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 1px solid rgba(239, 232, 212, 0.28);
+  border-radius: 2px;
+}
+
 #${ROOT_ID} table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
 #${ROOT_ID} th, #${ROOT_ID} td {
   text-align: left;
@@ -603,6 +685,9 @@ export function createShell(deps: ShellDeps): ShellHandle {
       role: 'dialog',
       'aria-modal': 'true',
       'aria-labelledby': 'cf-shell-title',
+      // Focusable so a reading screen can put the caret at the top of the text
+      // rather than on the Back button at the bottom.
+      tabindex: '-1',
     },
     [body],
   );
@@ -761,6 +846,9 @@ export function createShell(deps: ShellDeps): ShellHandle {
           ? 'Create a link that starts a game with a friend'
           : 'Needs a Supabase connection — see docs/LOCAL_DEVELOPMENT.md',
       }),
+      button('World & cast', () => open('cast'), {
+        title: 'The setting, the two houses, the six characters and the board marks',
+      }),
       button('Credits', () => open('credits')),
       button('Settings', () => open('settings')),
       button('Help', () => open('help')),
@@ -843,6 +931,64 @@ export function createShell(deps: ShellDeps): ShellHandle {
         ),
         backButton(),
       ),
+    );
+  }
+
+  function renderCast(): void {
+    const cast = el('table', {}, [
+      el('thead', {}, [
+        el('tr', {}, [el('th', {}, ['Piece']), el('th', {}, ['Character']), el('th', {}, ['Way of fighting'])]),
+      ]),
+    ]);
+    const body2 = el('tbody', {});
+    for (const c of CAST) {
+      body2.append(
+        el('tr', {}, [el('td', {}, [c.piece]), el('td', {}, [c.name]), el('td', {}, [c.fighting])]),
+      );
+    }
+    cast.append(body2);
+
+    const house = (name: string, blurb: string, swatch: string): HTMLElement =>
+      el('div', { class: 'cf-shell-house' }, [
+        el('span', { class: 'cf-shell-swatch', style: `background:${swatch}`, 'aria-hidden': 'true' }),
+        el('div', {}, [el('strong', {}, [name]), el('span', { class: 'cf-shell-hint' }, [blurb])]),
+      ]);
+
+    body.append(
+      heading('World & cast'),
+      el('h3', {}, ['The world']),
+      el('p', {}, [
+        'Chess played by a Norse warband. The rules never bend — but a capture ' +
+          'is not a piece lifted off a square. It is two figures meeting, and ' +
+          'only one of them walking away.',
+      ]),
+      el('p', {}, [
+        'Nothing here is borrowed. The cast, the heraldry and every duel were ' +
+          'designed for this project, drawn from saga matter, the Bayeux ' +
+          'Tapestry and the marginalia of medieval manuscripts.',
+      ]),
+      el('h3', {}, ['The two houses']),
+      el('div', { class: 'cf-shell-houses' }, [
+        house('Ash', 'Pale birch, bone and bright steel.', '#e6dfcb'),
+        house('Ember', 'Charred oak and black iron, lit faintly from within.', '#2c211a'),
+      ]),
+      el('p', {}, [
+        'Ash and Ember stand in for white and black, and they are separated by ' +
+          'lightness rather than hue — so the board stays readable in greyscale ' +
+          'and to a colour-blind eye.',
+      ]),
+      el('h3', {}, ['The cast']),
+      cast,
+      el('p', {}, [
+        'Defeat is defeat, not butchery. A huscarl’s shield fails and he ' +
+          'kneels; a berserkr is unhorsed; a völva’s staff breaks and her hood ' +
+          'collapses as if empty; a jötunn cracks along its seams and sinks into ' +
+          'rubble; a valkyrie is brought out of the air and folds her wings; a ' +
+          'jarl plants his greatsword and slumps against it.',
+      ]),
+      el('h3', {}, ['Reading the board']),
+      definitions(BOARD_MARKS),
+      actions(backButton()),
     );
   }
 
@@ -1155,11 +1301,15 @@ export function createShell(deps: ShellDeps): ShellHandle {
     );
   }
 
+  /** Screens that are prose to be read, not a form to be filled. */
+  const READING_SCREENS = new Set<ShellScreen>(['cast', 'credits', 'help']);
+
   const SCREENS: Record<ShellScreen, () => void> = {
     menu: renderMenu,
     new: renderNewGame,
     challenge: renderChallenge,
     join: renderJoin,
+    cast: renderCast,
     credits: renderCredits,
     settings: renderSettings,
     help: renderHelp,
@@ -1168,12 +1318,17 @@ export function createShell(deps: ShellDeps): ShellHandle {
   function render(): void {
     body.replaceChildren();
     SCREENS[screen]();
-    const first = panel.querySelector<HTMLElement>(
-      'button, select, input:not([type="hidden"])',
-    );
-    // preventScroll matters on the long screens: focusing normally scrolls the
-    // control into view and the heading disappears above the fold.
-    first?.focus({ preventScroll: true });
+    if (READING_SCREENS.has(screen)) {
+      // On a screen that is text with a Back button at the end, focusing that
+      // button drags the panel to the bottom — browsers scroll focus into view
+      // on a later frame, so preventScroll does not save us. Focus the panel
+      // instead: the reader starts at the top and tabs on from there.
+      panel.focus({ preventScroll: true });
+    } else {
+      panel.querySelector<HTMLElement>('button, select, input:not([type="hidden"])')?.focus({
+        preventScroll: true,
+      });
+    }
     panel.scrollTop = 0;
   }
 
