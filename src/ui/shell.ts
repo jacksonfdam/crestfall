@@ -47,7 +47,29 @@ export type ShellScreen =
   | 'cast'
   | 'credits'
   | 'settings'
-  | 'help';
+  | 'help'
+  | 'over';
+
+/**
+ * The end of a game, as integration sees it. The shell renders this and knows
+ * nothing about chess: how a result is worded and which statistics are worth
+ * counting are decided where the move history lives.
+ */
+export interface GameOverSummary {
+  /** 'Checkmate', 'Stalemate', 'Draw'. */
+  headline: string;
+  /** 'Ash wins', 'You win', 'Insufficient material'. */
+  outcome: string;
+  /** True for a win, so the wording can be coloured as one. */
+  decisive: boolean;
+  /** Label → value, rendered as a grid of tiles. */
+  stats: [string, string][];
+  fen: string;
+  pgn: string;
+  /** False when a rematch cannot be offered — an online match, for instance. */
+  canRematch: boolean;
+  rematchHint?: string;
+}
 
 /**
  * Link-based challenges. The shell renders the forms and reports intent; the
@@ -80,6 +102,8 @@ export interface ShellDeps {
   net: ShellNet;
   /** Start a game with these options and hand the screen back to the board. */
   onStartGame(opts: NewGameOptions): void;
+  /** Play the same setup again, with a fresh seed. */
+  onRematch(): void;
   /** Menu opened/closed, so integration can hide or show the in-game panel. */
   onVisibilityChange(open: boolean): void;
   /** True once a game is running — gates "Continuar" and Esc-to-close. */
@@ -89,6 +113,8 @@ export interface ShellDeps {
 export interface ShellHandle {
   open(screen?: ShellScreen): void;
   close(): void;
+  /** Present the result. Integration decides when — after the last duel lands. */
+  showGameOver(summary: GameOverSummary): void;
   dispose(): void;
 }
 
@@ -343,7 +369,9 @@ const CSS = `
   text-transform: uppercase;
   color: var(--cf-gold);
 }
-#${ROOT_ID} h3:first-of-type { margin-top: 0; }
+/* No :first-of-type reset here. On the result screen the first h3 follows the
+   action buttons, and zeroing its top margin collapses it onto them. Adjacent
+   margins collapse anyway, so the h2 above never doubles up. */
 #${ROOT_ID} p {
   margin: 0 0 0.7rem;
   line-height: 1.55;
@@ -532,6 +560,77 @@ const CSS = `
   color: var(--cf-bone);
   letter-spacing: 0.06em;
 }
+/* ── Result screen ───────────────────────────────────────────────────────── */
+
+#${ROOT_ID} .cf-shell-headline {
+  margin-bottom: 0.2rem;
+  padding-bottom: 0;
+  border-bottom: 0;
+  font-size: 1.3rem;
+  color: var(--cf-parchment);
+}
+#${ROOT_ID} .cf-shell-outcome {
+  margin: 0 0 1.2rem;
+  font-family: var(--cf-display);
+  font-size: clamp(1.8rem, 4.5vw, 2.5rem);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cf-bone);
+  line-height: 1.1;
+}
+#${ROOT_ID} .cf-shell-outcome.cf-won {
+  color: var(--cf-gold);
+  text-shadow: 0 0 30px rgba(217, 164, 65, 0.22);
+}
+
+#${ROOT_ID} .cf-shell-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.45rem;
+}
+#${ROOT_ID} .cf-shell-stat {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid rgba(239, 232, 212, 0.12);
+  border-radius: 3px;
+  background: rgba(239, 232, 212, 0.03);
+}
+#${ROOT_ID} .cf-shell-stat span {
+  display: block;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8b8577;
+}
+#${ROOT_ID} .cf-shell-stat strong {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--cf-display);
+  font-size: 1.15rem;
+  color: var(--cf-bone);
+}
+
+#${ROOT_ID} .cf-shell-export { margin-bottom: 0.7rem; }
+#${ROOT_ID} .cf-shell-export-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+#${ROOT_ID} .cf-shell-export-head label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #8b8577;
+}
+#${ROOT_ID} button.cf-shell-copy { padding: 0.2rem 0.55rem; font-size: 0.76rem; }
+#${ROOT_ID} textarea.cf-shell-link { resize: vertical; line-height: 1.45; }
+#${ROOT_ID} .cf-shell-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* The two houses, shown rather than described: the swatches are the actual
    faction values, so the greyscale claim beside them can be checked by eye. */
 #${ROOT_ID} .cf-shell-houses {
@@ -724,6 +823,8 @@ export function createShell(deps: ShellDeps): ShellHandle {
   });
   /** Survives re-renders; render() rebuilds the DOM, not the entered values. */
   let challenge = freshChallenge();
+  /** The result being presented, if any. */
+  let over: GameOverSummary | null = null;
 
   // ── Small builders ────────────────────────────────────────────────────────
 
@@ -931,6 +1032,91 @@ export function createShell(deps: ShellDeps): ShellHandle {
         ),
         backButton(),
       ),
+    );
+  }
+
+  /** A read-only field plus a copy button, for text meant to be taken away. */
+  function copyField(label: string, value: string, rows: number): HTMLElement {
+    const id = `cf-shell-export-${label.toLowerCase()}`;
+    const field =
+      rows > 1
+        ? el('textarea', { id, class: 'cf-shell-link', readonly: 'readonly', rows: String(rows) })
+        : el('input', { id, class: 'cf-shell-link', type: 'text', readonly: 'readonly' });
+    (field as HTMLInputElement | HTMLTextAreaElement).value = value;
+    const status = el('span', { class: 'cf-shell-hint', role: 'status' });
+    return el('div', { class: 'cf-shell-export' }, [
+      el('div', { class: 'cf-shell-export-head' }, [
+        el('label', { for: id }, [label]),
+        button(
+          'Copy',
+          () => {
+            navigator.clipboard.writeText(value).then(
+              () => {
+                status.textContent = 'Copied.';
+              },
+              () => {
+                status.textContent = 'Select the text and copy it manually.';
+                (field as HTMLInputElement | HTMLTextAreaElement).select();
+              },
+            );
+          },
+          { class: 'cf-shell-copy' },
+        ),
+        status,
+      ]),
+      field,
+    ]);
+  }
+
+  function renderGameOver(): void {
+    const s = over;
+    if (!s) {
+      open('menu');
+      return;
+    }
+
+    const stats = el('div', { class: 'cf-shell-stats' });
+    for (const [label, value] of s.stats) {
+      stats.append(
+        el('div', { class: 'cf-shell-stat' }, [
+          el('span', {}, [label]),
+          el('strong', {}, [value]),
+        ]),
+      );
+    }
+
+    const rematch = button(
+      'Rematch',
+      () => {
+        over = null;
+        deps.onRematch();
+      },
+      { class: 'cf-primary' },
+    );
+    if (!s.canRematch) {
+      rematch.disabled = true;
+      if (s.rematchHint) rematch.title = s.rematchHint;
+    }
+
+    body.append(
+      el('h2', { id: 'cf-shell-title', class: 'cf-shell-headline' }, [s.headline]),
+      el('p', { class: s.decisive ? 'cf-shell-outcome cf-won' : 'cf-shell-outcome' }, [s.outcome]),
+      stats,
+      actions(
+        rematch,
+        button('Main menu', () => {
+          over = null;
+          open('menu');
+        }),
+      ),
+    );
+    if (!s.canRematch && s.rematchHint) {
+      body.append(el('p', { class: 'cf-shell-hint' }, [s.rematchHint]));
+    }
+    body.append(
+      el('h3', {}, ['Take the game with you']),
+      copyField('FEN', s.fen, 1),
+      copyField('PGN', s.pgn, 6),
     );
   }
 
@@ -1313,6 +1499,7 @@ export function createShell(deps: ShellDeps): ShellHandle {
     credits: renderCredits,
     settings: renderSettings,
     help: renderHelp,
+    over: renderGameOver,
   };
 
   function render(): void {
@@ -1364,6 +1551,10 @@ export function createShell(deps: ShellDeps): ShellHandle {
   return {
     open,
     close,
+    showGameOver(summary: GameOverSummary): void {
+      over = summary;
+      open('over');
+    },
     dispose(): void {
       document.removeEventListener('keydown', onKeyDown);
       root.remove();
