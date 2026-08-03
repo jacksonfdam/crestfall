@@ -718,6 +718,18 @@ function boot(): void {
       skipDuel: skipDuels,
     });
     decorateToolbar(uiMount);
+
+    // The board cursor is a keyboard affordance; the stylesheet hides it while
+    // this reads false, so a mouse player is not shown a box they did not place.
+    const overlay = uiMount.querySelector('.cf-overlay');
+    if (overlay) {
+      const usingKeyboard = (on: boolean): void => {
+        overlay.setAttribute('data-cf-keyboard', String(on));
+      };
+      usingKeyboard(false);
+      overlay.addEventListener('focus', () => usingKeyboard(true));
+      overlay.addEventListener('blur', () => usingKeyboard(false));
+    }
   }
 
   // ── Challenge matches ─────────────────────────────────────────────────────

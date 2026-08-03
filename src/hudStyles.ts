@@ -41,6 +41,20 @@ html, body {
 #ui-root { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
 #ui-root .cf-overlay { pointer-events: none; }
 
+/* The cursor, selection and target marks on that overlay are affordances for
+   keyboard play. Drawn unconditionally they read as a selection the mouse player
+   never made, and since the overlay grid is a centred-square approximation of a
+   board drawn in perspective, the box does not even sit on the square beneath
+   it. The 3D scene draws its own highlights for mouse play, so these only earn
+   their place once the board is actually being played from the keyboard.
+   Gated on an attribute that integration toggles from focus/blur rather than on
+   :focus, because :focus cannot be exercised in a headless browser (the document
+   never holds system focus) and this needs to be verifiable. A missing attribute
+   leaves the marks visible, so a failure to wire it up degrades to the old
+   behaviour rather than to an invisible cursor. */
+#ui-root .cf-overlay[data-cf-keyboard='false'] .cf-cell { border-color: transparent; }
+#ui-root .cf-overlay[data-cf-keyboard='false'] .cf-cell::after { display: none; }
+
 /* One palette for the whole product. src/ui/style.css was written as a
    standalone panel and leans cool — blue-grey surfaces and a sky-blue focus
    ring — which reads as a web app sitting on top of a Norse board rather than
