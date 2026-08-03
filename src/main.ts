@@ -58,6 +58,13 @@ const FACTION = { w: 'ash', b: 'ember' } as const;
 const MAX_FRAME_SECONDS = 0.05;
 
 /**
+ * How long the AI waits before playing, on top of waiting for the board to fall
+ * quiet. Purely pacing: the search has already run and the move is already
+ * decided, so this changes nothing about strength or determinism.
+ */
+const AI_MOVE_PAUSE_MS = 700;
+
+/**
  * "Sem som" is derived from `masterVolume === 0` rather than a new Settings
  * field, because src/core is frozen and the audio engine already honours the
  * volume. Only the level to come back to needs remembering, and it is not game
@@ -303,10 +310,36 @@ function boot(): void {
   const workerPort = createAiPort(worker);
   const opponentPort = createOpponentPort();
   let opponentIsRemote = false;
+
+  /**
+   * The AI answers a Thrall-tier search in about 150 ms, so its move used to
+   * land while the player's own move was still gliding and its duel still
+   * playing. The search itself is untouched — it starts immediately and keeps
+   * its full time budget — but the reply is held until the board has gone quiet
+   * and a beat has passed, so a turn reads as a turn.
+   *
+   * Held in the frame loop rather than on a timer because the wait is partly a
+   * question of what is on screen, and the loop already knows.
+   */
+  let heldReply: { readyAt: number; deliver: () => void } | null = null;
+
   const routedPort: AiPort = {
-    post: (req) => (opponentIsRemote ? opponentPort.post(req) : workerPort.post(req)),
+    post: (req) => {
+      // A cancelled search must drop anything waiting, or a stale move would
+      // arrive after an undo. The controller would discard it on generation
+      // anyway; this just avoids the pointless wait.
+      if (req.type === 'cancel') heldReply = null;
+      return opponentIsRemote ? opponentPort.post(req) : workerPort.post(req);
+    },
     onReply: (fn) => {
-      workerPort.onReply(fn);
+      // Only the AI is paced. A remote friend's move already took real time, and
+      // holding it back would desync the two boards' sense of whose turn it is.
+      workerPort.onReply((reply) => {
+        heldReply = {
+          readyAt: performance.now() + AI_MOVE_PAUSE_MS,
+          deliver: () => fn(reply),
+        };
+      });
       opponentPort.onReply(fn);
     },
   };
@@ -919,6 +952,16 @@ function boot(): void {
     const dt = Math.min(MAX_FRAME_SECONDS, Math.max(0, (now - last) / 1000));
     last = now;
     director.update(dt);
+
+    // Let the AI move once its pause has elapsed and nothing is still playing.
+    // Checked after director.update so a duel that just finished counts as done
+    // on this frame rather than the next.
+    if (heldReply && now >= heldReply.readyAt && activeDuels.size === 0 && !director.active) {
+      const { deliver } = heldReply;
+      heldReply = null;
+      deliver();
+    }
+
     stage.render(dt);
     syncBoardRect();
     requestAnimationFrame(frame);
