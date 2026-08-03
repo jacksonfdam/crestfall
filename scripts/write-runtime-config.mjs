@@ -2,6 +2,10 @@
  * Writes public/config.json from the environment, so a hosted build can reach
  * Supabase without the file being committed.
  *
+ * Plain .mjs rather than .ts on purpose: this runs on the host's Node during a
+ * deploy, and requiring --experimental-strip-types there would make the build
+ * depend on a Node version this repo does not control.
+ *
  * Runs as the first step of `npm run build`. It is deliberately forgiving: with
  * no Supabase variables set it writes nothing and exits 0, which keeps CI and
  * offline builds working — the game runs fine without the file and only link
