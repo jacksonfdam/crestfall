@@ -3,6 +3,7 @@ import { SETTINGS_STORAGE_KEY, SettingsStore } from '../src/ui/settings.ts';
 import type { StorageLike } from '../src/ui/settings.ts';
 import { describeEvent, describeMove, describeStatus, formatClock } from '../src/ui/announce.ts';
 import { DEFAULT_SETTINGS } from '../src/core/contract.ts';
+import { wantsStillSplash } from '../src/ui/splash.ts';
 import type { GameEvent, MoveRecord } from '../src/core/contract.ts';
 
 class MemoryStorage implements StorageLike {
@@ -220,5 +221,28 @@ describe('formatClock', () => {
 
   it('never goes negative', () => {
     expect(formatClock(-5000)).toBe('0:00');
+  });
+});
+
+describe('splash reduced-motion decision', () => {
+  const encoded = (v: unknown) => JSON.stringify(v);
+
+  it('follows an explicit user override in either direction', () => {
+    expect(wantsStillSplash(encoded({ reducedMotion: true }), false)).toBe(true);
+    expect(wantsStillSplash(encoded({ reducedMotion: false }), true)).toBe(false);
+  });
+
+  it('follows the OS preference until the user has overridden it', () => {
+    expect(wantsStillSplash(null, true)).toBe(true);
+    expect(wantsStillSplash(null, false)).toBe(false);
+    // SettingsStore only persists overrides, so the key can exist without it.
+    expect(wantsStillSplash(encoded({ duelSpeed: 2 }), true)).toBe(true);
+    expect(wantsStillSplash(encoded({ duelSpeed: 2 }), false)).toBe(false);
+  });
+
+  it('falls back to the OS preference on unusable stored settings', () => {
+    expect(wantsStillSplash('{not json', true)).toBe(true);
+    expect(wantsStillSplash('null', true)).toBe(true);
+    expect(wantsStillSplash(encoded({ reducedMotion: 'yes' }), false)).toBe(false);
   });
 });

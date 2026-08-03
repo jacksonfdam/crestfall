@@ -13,6 +13,8 @@
       <div id="sr-announcer" role="status" aria-live="assertive" class="sr-only"></div>
     </div>
     <script type="module" src="/src/analytics.ts"></script>
+    <!-- Loaded before the app so the title is on screen while it boots. -->
+    <script type="module" src="/src/ui/splash.ts"></script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
