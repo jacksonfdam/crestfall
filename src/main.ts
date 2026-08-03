@@ -49,6 +49,7 @@ import { createUI } from './ui/index.ts';
 import type { UIHandle } from './ui/index.ts';
 import { SettingsStore } from './ui/settings.ts';
 import { SHELL_BAR_ID, createShell, decorateToolbar } from './ui/shell.ts';
+import type { GameOverSummary } from './ui/shell.ts';
 
 const FACTION = { w: 'ash', b: 'ember' } as const;
 
@@ -342,6 +343,69 @@ function mountRotatePrompt(): void {
 
 const SIDE_LABEL: Record<Color, string> = { w: 'Ash', b: 'Ember' };
 const sideLabel = (side: Color): string => SIDE_LABEL[side];
+const other = (side: Color): Color => (side === 'w' ? 'b' : 'w');
+
+function clock(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
+/** How a finished game reads, and what was worth counting along the way. */
+function describeResult(
+  e: GameEvent,
+  history: MoveRecord[],
+  elapsedMs: number,
+  naming: { forSide: Color | null; opponent: string | null },
+): Pick<GameOverSummary, 'headline' | 'outcome' | 'decisive' | 'stats'> {
+  const captures = { w: 0, b: 0 };
+  let checks = 0;
+  let promotions = 0;
+  let castles = 0;
+  for (const r of history) {
+    if (r.capture) captures[r.color]++;
+    if (r.check || r.checkmate) checks++;
+    if (r.promotion) promotions++;
+    if (r.castle) castles++;
+  }
+  const duels = captures.w + captures.b;
+
+  // After a mate the side to move is the mated one, so the winner is the other.
+  const winner = other(e.turn);
+  const namedWinner =
+    naming.forSide === null
+      ? `${sideLabel(winner)} wins`
+      : winner === naming.forSide
+        ? 'You win'
+        : `${naming.opponent ?? sideLabel(winner)} wins`;
+
+  const DRAWS: Record<string, [string, string]> = {
+    stalemate: ['Stalemate', 'Nobody wins'],
+    'draw-fifty': ['Draw', 'Fifty moves without progress'],
+    'draw-repetition': ['Draw', 'The same position, three times'],
+    'draw-material': ['Draw', 'Not enough left to force a mate'],
+  };
+  const draw = DRAWS[e.status];
+
+  const stats: [string, string][] = [
+    ['Moves', String(Math.ceil(history.length / 2))],
+    ['Duration', clock(elapsedMs)],
+    ['Duels fought', String(duels)],
+    // Split per side rather than "1 · 0", which leaves the reader guessing
+    // which number belongs to whom.
+    ['Ash captured', String(captures.w)],
+    ['Ember captured', String(captures.b)],
+  ];
+  if (checks > 0) stats.push(['Checks given', String(checks)]);
+  if (promotions > 0) stats.push(['Promotions', String(promotions)]);
+  if (castles > 0) stats.push(['Castles', String(castles)]);
+
+  return {
+    headline: draw ? draw[0] : 'Checkmate',
+    outcome: draw ? draw[1] : namedWinner,
+    decisive: !draw,
+    stats,
+  };
+}
 
 /**
  * Transient status for things the player must hear about but that belong to
@@ -496,6 +560,8 @@ function boot(): void {
     for (const rig of duel.rigs) rig.dispose();
     reapplyDuelHides();
     if (!clearingDuels) audio.play('capture-resolve');
+    // The last duel of the game has just landed; now the result can be shown.
+    maybeShowResult();
   }
 
   function duelsEnabled(e: GameEvent): boolean {
@@ -714,6 +780,9 @@ function boot(): void {
         .sendMove({ from: r.from, to: r.to, promotion: r.promotion }, e.moveIndex)
         .catch(() => notify('That move could not be sent — check your connection.'));
     }
+
+    pendingResult = e.status === 'active' ? null : e;
+    maybeShowResult();
   }
 
   api.subscribe(onGameEvent);
@@ -732,6 +801,35 @@ function boot(): void {
    */
   let ui: UIHandle | null = null;
   let gameStarted = false;
+  /** Kept so a rematch can repeat the setup with a fresh seed. */
+  let lastGameOptions: NewGameOptions | null = null;
+  let gameStartedAt = 0;
+  /**
+   * A finished game whose result has not been shown yet. The mating move has a
+   * duel of its own, and covering it with a result screen would rob the player
+   * of the one thing they just earned — so the screen waits for the board to
+   * fall quiet.
+   */
+  let pendingResult: GameEvent | null = null;
+
+  function maybeShowResult(): void {
+    const e = pendingResult;
+    if (!e || activeDuels.size > 0 || director.active) return;
+    pendingResult = null;
+    shell.showGameOver({
+      ...describeResult(e, api.history(), performance.now() - gameStartedAt, {
+        forSide: matchLive ? localSide : null,
+        opponent: session?.opponent ?? null,
+      }),
+      fen: api.exportFEN(),
+      pgn: api.exportPGN(),
+      // Both players would have to agree, and the protocol has no word for it.
+      canRematch: !matchLive,
+      rematchHint: matchLive
+        ? 'A rematch needs a fresh challenge link — there is no way to agree one mid-match.'
+        : undefined,
+    });
+  }
 
   function ensureUI(): void {
     if (ui) return;
@@ -782,6 +880,7 @@ function boot(): void {
     matchLive = true;
     opponentIsRemote = true;
     localSide = info.localSide;
+    gameStartedAt = performance.now();
     gameStarted = true;
     ensureUI();
     api.newGame({ mode: 'online', seed: info.seed, humanColor: info.localSide });
@@ -841,11 +940,24 @@ function boot(): void {
         opponentIsRemote = false;
         void leaving.leave('left');
       }
+      lastGameOptions = opts;
+      gameStartedAt = performance.now();
       gameStarted = true;
       ensureUI();
       api.newGame(opts);
       armAudio();
       requestLandscape();
+    },
+    onRematch: () => {
+      const base: NewGameOptions = lastGameOptions ?? { mode: 'hotseat', seed: 0 };
+      const opts: NewGameOptions = { ...base, seed: randomSeed() };
+      lastGameOptions = opts;
+      gameStartedAt = performance.now();
+      gameStarted = true;
+      ensureUI();
+      api.newGame(opts);
+      shell.close();
+      armAudio();
     },
     onVisibilityChange: (open) => {
       // Hiding #ui-root collapses the sidebar, so the board gets the full width
