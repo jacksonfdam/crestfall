@@ -771,11 +771,36 @@ export class AudioEngine {
       // not pump between beats.
       const limiter = this.ctx.createDynamicsCompressor();
       limiter.threshold.value = -8;
-      limiter.knee.value = 6;
-      limiter.ratio.value = 12;
+      limiter.knee.value = 10;
+      // Gentler than a true limiter on purpose: at ratio 12 the bus squashes
+      // percussive transients into a flat, brittle edge, which is heard as
+      // harshness rather than as control.
+      limiter.ratio.value = 8;
       limiter.attack.value = 0.003;
       limiter.release.value = 0.18;
-      this.sfxBus.connect(limiter);
+
+      // Voicing, ahead of the limiter so it reacts to the softened signal
+      // instead of pumping on high-frequency spikes.
+      //
+      // Everything here is synthesized, and synthesized metal and stone carry
+      // far more energy above ~4 kHz than a recording of the same event would —
+      // that excess is what reads as shrill. A shelf takes the edge off without
+      // dulling the body of a hit, and a shallow low-pass removes the very top
+      // where the noise sources turn into hiss.
+      const edge = this.ctx.createBiquadFilter();
+      edge.type = 'highshelf';
+      edge.frequency.value = 4200;
+      edge.gain.value = -7;
+
+      const ceiling = this.ctx.createBiquadFilter();
+      ceiling.type = 'lowpass';
+      ceiling.frequency.value = 9000;
+      // No resonance: a peak here would put back the brightness being removed.
+      ceiling.Q.value = 0.4;
+
+      this.sfxBus.connect(edge);
+      edge.connect(ceiling);
+      ceiling.connect(limiter);
       limiter.connect(this.master);
       this.master.connect(this.ctx.destination);
       this.applySettings(this.settings);
