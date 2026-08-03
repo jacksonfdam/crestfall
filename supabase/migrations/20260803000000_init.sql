@@ -6,10 +6,15 @@
 -- touches Postgres. No accounts, no history, no personal data beyond a
 -- display name the player types in.
 --
--- Tables are prefixed `crestfall_` because this project shares its Supabase
--- instance with uBomber, which owns the unprefixed `rooms` table.
+-- This project SHARES its Supabase instance with uBomber, which owns the
+-- unprefixed `rooms` table and the hosted project's migration history. Two
+-- repositories cannot share one history, so against the hosted project this
+-- file is applied by hand (`make db-apply-shared`) rather than by
+-- `supabase db push`. That makes re-running it a normal event, so every
+-- statement below is idempotent: applying it twice is a no-op, not an error.
+-- See docs/DEPLOYMENT.md.
 
-create table public.crestfall_invites (
+create table if not exists public.crestfall_invites (
   id uuid primary key default gen_random_uuid(),
   -- Confusable characters (I, L, O, 0, 1) are excluded so a code stays
   -- readable out loud.
@@ -28,12 +33,14 @@ create table public.crestfall_invites (
   expires_at timestamptz not null default now() + interval '15 minutes'
 );
 
-create index crestfall_invites_expires_at_idx on public.crestfall_invites (expires_at);
+create index if not exists crestfall_invites_expires_at_idx
+  on public.crestfall_invites (expires_at);
 
 alter table public.crestfall_invites enable row level security;
 
 -- Invites are throwaway, anonymous objects: anyone may create one, and anyone
 -- holding the link may look it up. Nothing sensitive is stored.
+drop policy if exists "anyone can create invites" on public.crestfall_invites;
 create policy "anyone can create invites"
   on public.crestfall_invites for insert
   to anon, authenticated
@@ -42,11 +49,13 @@ create policy "anyone can create invites"
 -- Expiry is enforced here rather than in the client: after 15 minutes the row
 -- is simply not visible, so a stale link cannot be claimed even by a client
 -- that ignores the timestamp.
+drop policy if exists "anyone can read live invites" on public.crestfall_invites;
 create policy "anyone can read live invites"
   on public.crestfall_invites for select
   to anon, authenticated
   using (expires_at > now());
 
+drop policy if exists "anyone can claim a live invite" on public.crestfall_invites;
 create policy "anyone can claim a live invite"
   on public.crestfall_invites for update
   to anon, authenticated
@@ -58,9 +67,17 @@ create policy "anyone can claim a live invite"
 -- anonymous request fails with "permission denied" before any policy is even
 -- consulted. The policies above are what decide which rows are reachable;
 -- these grants decide which verbs exist at all.
+
 -- Server-side tooling (and the scheduled cleanup) needs unrestricted access;
 -- service_role bypasses RLS but still needs the privilege to exist.
 grant all on public.crestfall_invites to service_role;
+
+-- Supabase's default privileges hand `anon` everything on new tables in the
+-- public schema, which includes verbs RLS does not filter — TRUNCATE is not a
+-- row-level operation. PostgREST never issues them with an anon key, so this is
+-- belt and braces rather than a live hole, but on a shared instance the table's
+-- reachable surface should be stated rather than inherited.
+revoke all on public.crestfall_invites from anon, authenticated;
 
 grant select on public.crestfall_invites to anon, authenticated;
 
