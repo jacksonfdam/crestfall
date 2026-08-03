@@ -15,7 +15,12 @@
 import type { PRNG } from '../core/prng.ts';
 import { tone, type SynthContext, type VoicePart } from './synth.ts';
 
-const ROOT = 73.42; // D2
+/**
+ * Bb1. Measured from the reference track the voicing was matched against: its
+ * strongest partials cluster at 57-59 Hz, with the bulk of its energy below
+ * 120 Hz and barely 4% above 1 kHz.
+ */
+const ROOT = 58.27; // Bb1
 const DORIAN = [0, 2, 3, 5, 7, 9, 10] as const;
 const AEOLIAN = [0, 2, 3, 5, 7, 8, 10] as const;
 const LOOKAHEAD = 0.6;
@@ -58,12 +63,12 @@ export class Score {
     // harmonic glare survives the notes' own low-pass.
     const glare = ctx.createBiquadFilter();
     glare.type = 'highshelf';
-    glare.frequency.value = 2200;
-    glare.gain.value = -5;
+    glare.frequency.value = 1200;
+    glare.gain.value = -6;
 
     const ceiling = ctx.createBiquadFilter();
     ceiling.type = 'lowpass';
-    ceiling.frequency.value = 3200;
+    ceiling.frequency.value = 1400;
     // No resonance: a peak here would reintroduce exactly what it removes.
     ceiling.Q.value = 0.4;
 
@@ -115,17 +120,25 @@ export class Score {
 
   /**
    * Root, octave below, and the fifth, all sine. The pair at the root is
-   * detuned a few cents against itself so the drone breathes; that beating is
-   * what a sawtooth's harmonics were doing before, without the edge.
+   * detuned +/-18 cents against itself, which puts the two partials about
+   * 0.75 Hz apart and produces the slow beat the reference has. That breathing
+   * is what a sawtooth's harmonics were doing before, without the edge.
    */
   private startDrone(): void {
     const t0 = this.ctx.currentTime;
     const long = 60 * 60 * 24; // effectively endless; stop() releases it
     for (const [freq, detune, level] of [
       [ROOT / 2, 0, 1],
-      [ROOT, -4, 0.85],
-      [ROOT, 4, 0.85],
+      [ROOT, -18, 0.85],
+      [ROOT, 18, 0.85],
       [ROOT * 1.5, 0, 0.5],
+      // A sustained mid pad, two octaves up and at its fifth. The reference
+      // carries about a quarter of its energy between 300 and 1000 Hz, and that
+      // energy is continuous — pad, not plucks. Filling it with louder melody
+      // notes instead just makes them stab, which is what made the old score
+      // grating; a quiet held pair sits under them and does the same job.
+      [ROOT * 4, -6, 0.55],
+      [ROOT * 6, 6, 0.4],
     ] as const) {
       this.droneParts.push(
         tone(this.ctx, this.calmBus, {
@@ -134,7 +147,7 @@ export class Score {
           type: 'sine',
           frequency: freq,
           detune,
-          env: { attack: 3, decay: long, peak: 0.11 * level, sustain: 1 },
+          env: { attack: 3, decay: long, peak: 0.075 * level, sustain: 1 },
         }),
       );
     }
@@ -163,7 +176,7 @@ export class Score {
   ): { part: VoicePart; filter: BiquadFilterNode } {
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.value = 1200 + this.intensity * 800;
+    filter.frequency.value = 1100 + this.intensity * 300;
     filter.Q.value = 0.5;
     filter.connect(this.calmBus);
     const part = tone(this.ctx, filter, {
@@ -171,7 +184,7 @@ export class Score {
       duration: 1.5,
       type: 'triangle',
       frequency,
-      env: { attack: 0.02, decay: 1.5, peak: 0.085 },
+      env: { attack: 0.02, decay: 1.5, peak: 0.12 },
     });
     return { part, filter };
   }
@@ -221,7 +234,7 @@ export class Score {
       const octave = this.prng() < 0.18 ? 2 : 1;
       const st = this.scale[degree % this.scale.length] ?? 0;
       this.notes.push({
-        ...this.scheduleNote(t, semitone(ROOT * 2 * octave, st)),
+        ...this.scheduleNote(t, semitone(ROOT * 4 * octave, st)),
         endsAt: t + NOTE_TAIL,
       });
       degree += this.prng() < 0.6 ? 1 : this.prng() < 0.5 ? -2 : 2;
