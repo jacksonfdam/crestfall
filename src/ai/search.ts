@@ -351,7 +351,16 @@ function decode(m: EngineMove): { from: number; to: number; promotion?: PieceTyp
  * comes only from limits.seed. Never returns an illegal move; if the
  * position has any legal move at all, a move is always returned.
  */
-export function search(fen: string, limits: SearchLimits): SearchOutcome {
+/**
+ * Iterative deepening, pausing after each completed depth.
+ *
+ * The pause points let a worker return to its event loop and observe a
+ * cancel; without them a synchronous search cannot be abandoned and a stale
+ * konungr search would hold the next one off for its whole budget. Yielding
+ * only between depths keeps results identical to the uninterrupted run,
+ * because a partial iteration is discarded whole either way.
+ */
+export function* searchSteps(fen: string, limits: SearchLimits): Generator<number, SearchOutcome> {
   const t0 = now();
   const root = fromFEN(fen);
   const rootMoves = legalMoves(root);
@@ -411,6 +420,9 @@ export function search(fen: string, limits: SearchLimits): SearchOutcome {
     if (bestScore >= MATE_BOUND || bestScore <= -MATE_BOUND) break;
     // Soft stop: no point starting an iteration we can't finish.
     if (now() - t0 > limits.budgetMs * 0.55) break;
+
+    // Abandonable boundary: the caller may stop driving us here.
+    yield completedDepth;
   }
 
   return {
@@ -420,4 +432,12 @@ export function search(fen: string, limits: SearchLimits): SearchOutcome {
     timeMs: now() - t0,
     score: bestScore,
   };
+}
+
+/** Run a search to completion without pausing. */
+export function search(fen: string, limits: SearchLimits): SearchOutcome {
+  const steps = searchSteps(fen, limits);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
 }

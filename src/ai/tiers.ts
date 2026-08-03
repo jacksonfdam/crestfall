@@ -8,7 +8,7 @@
 
 import type { AiTier } from '../core/contract.ts';
 import { TIER_BUDGET_MS } from '../core/aiProtocol.ts';
-import { search, type SearchOutcome } from './search.ts';
+import { search, searchSteps, type SearchLimits, type SearchOutcome } from './search.ts';
 
 export interface TierProfile {
   budgetMs: number;
@@ -34,11 +34,25 @@ export function searchTier(
   seed: number,
   budgetOverrideMs?: number,
 ): SearchOutcome {
+  return search(fen, tierLimits(tier, seed, budgetOverrideMs));
+}
+
+/** Step-wise form of {@link searchTier}, abandonable between depths. */
+export function searchTierSteps(
+  fen: string,
+  tier: AiTier,
+  seed: number,
+  budgetOverrideMs?: number,
+): Generator<number, SearchOutcome> {
+  return searchSteps(fen, tierLimits(tier, seed, budgetOverrideMs));
+}
+
+function tierLimits(tier: AiTier, seed: number, budgetOverrideMs?: number): SearchLimits {
   const p = TIER_PROFILE[tier];
-  return search(fen, {
+  return {
     budgetMs: budgetOverrideMs ?? p.budgetMs,
     maxDepth: p.maxDepth,
     noiseCp: p.noiseCp,
     seed,
-  });
+  };
 }

@@ -12,7 +12,6 @@ import * as THREE from 'three';
 import {
   INITIAL_FEN,
   fromFEN,
-  toFEN,
   legalMoves,
   applyMove,
   moveToRecord,
