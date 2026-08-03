@@ -87,21 +87,30 @@ export class GameController implements GameApi {
   }
 
   undo(): boolean {
-    // In vs-ai, undo the AI's reply too so it's the human's turn again.
-    const steps = this.opts.mode === 'vs-ai' && this.past.length >= 2 ? 2 : 1;
-    if (this.past.length < (this.opts.mode === 'vs-ai' ? steps : 1)) {
-      if (this.past.length === 0) return false;
-    }
+    if (this.past.length === 0) return false;
     this.cancelSearch();
-    for (let i = 0; i < steps && this.past.length > 0; i++) {
+    // In vs-ai, keep popping until it is the human's turn again — one ply if
+    // the AI's reply is still in flight, two once it has landed. Popping a
+    // fixed two plies would strand the game on an AI-to-move position with no
+    // search queued.
+    const maxSteps = this.opts.mode === 'vs-ai' ? 2 : 1;
+    for (let i = 0; i < maxSteps && this.past.length > 0; i++) {
       this.future.push(this.past.pop()!);
+      this.rewindToHistoryHead();
+      if (this.opts.mode !== 'vs-ai' || !this.isAiTurn()) break;
     }
+    this.emit('undo');
+    // Safety net: if we still landed on an AI-to-move position (e.g. undoing
+    // to the start of a game where the AI plays white), give it the move back.
+    this.maybeSearch();
+    return true;
+  }
+
+  private rewindToHistoryHead(): void {
     this.pos =
       this.past.length > 0
         ? this.past[this.past.length - 1].pos
         : fromFEN(this.opts.fen ?? INITIAL_FEN);
-    this.emit('undo');
-    return true;
   }
 
   redo(): boolean {
