@@ -71,7 +71,13 @@ export class DuelDirector {
   private current: Playback | null = null;
   private readonly queue: Playback[] = [];
 
-  constructor(private readonly deps: DuelDirectorDeps) {}
+  private readonly deps: DuelDirectorDeps;
+
+  // Declared as a field rather than a parameter property: the verification
+  // harnesses run under node --experimental-strip-types, which rejects those.
+  constructor(deps: DuelDirectorDeps) {
+    this.deps = deps;
+  }
 
   get active(): boolean {
     return this.current !== null;
