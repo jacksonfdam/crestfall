@@ -125,10 +125,11 @@ function runGame(gameIndex: number): string {
     const variants = DUEL_MATRIX[key];
     if (!variants || variants.length === 0) continue;
 
-    const idx = pickDuel(seed, ply, record.piece, record.capture.type);
-    digest.pushString(`${key}#${idx}`);
-
-    const script = variants[idx % variants.length];
+    const script = pickDuel(seed, ply, record.piece, record.capture.type);
+    if (!script) continue;
+    // Record WHICH variant fired, not just its poses: a changed selection
+    // must fail the gate even if the two variants happened to pose alike.
+    digest.pushString(`${key}#${variants.indexOf(script)}`);
     const attacker = buildCharacter(
       PIECE_CHARACTER[record.piece],
       record.color === 'w' ? 'ash' : 'ember',

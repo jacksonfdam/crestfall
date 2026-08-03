@@ -98,9 +98,8 @@ for (let g = 0; g < GAMES; g++) {
       totalDuels++;
       const key = `${record.piece}x${record.capture.type}`;
       const variants = DUEL_MATRIX[key];
-      if (variants && variants.length > 0) {
-        const idx = pickDuel(seed, ply, record.piece, record.capture.type);
-        const script = variants[idx % variants.length];
+      const script = pickDuel(seed, ply, record.piece, record.capture.type);
+      if (variants && script) {
         const attacker = buildCharacter(
           PIECE_CHARACTER[record.piece],
           record.color === 'w' ? 'ash' : 'ember',
