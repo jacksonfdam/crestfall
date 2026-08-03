@@ -37,6 +37,14 @@ describe('HUD stylesheet', () => {
     expect(HUD_CSS).toMatch(/#ui-root\s+\.cf-overlay\s*{[^}]*pointer-events:\s*none/);
   });
 
+  it('hides the keyboard cursor unless the board is played by keyboard', () => {
+    // Otherwise a mouse player sees a box they never placed, on a square the
+    // approximated overlay grid does not even line up with.
+    expect(HUD_CSS).toMatch(
+      /\.cf-overlay\[data-cf-keyboard='false'\][^{]*\.cf-cell\s*{[^}]*border-color:\s*transparent/,
+    );
+  });
+
   it('still opts the actual controls back in', () => {
     expect(HUD_CSS).toMatch(/\.cf-ui\s*>\s*\*[^{]*{[^}]*pointer-events:\s*auto/);
   });
