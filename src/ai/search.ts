@@ -1,6 +1,11 @@
 /**
- * Negamax alpha-beta with iterative deepening, quiescence, transposition
- * table, killers/history move ordering, and a check extension.
+ * Alpha-beta search in negate-max form, with iterative deepening, quiescence,
+ * transposition table, killers/history move ordering, and a check extension.
+ *
+ * "Negate-max" is the compact way to write minimax for a zero-sum game: since
+ * max(a, b) === -min(-a, -b), one routine serves both sides as long as the
+ * score is negated on the way back up. That is where the negation in
+ * `-negateMax(...)` at every recursion comes from.
  *
  * Deterministic for a given (fen, limits, seed): tie-breaks between equal
  * moves come only from hash32(seed, move); no Math.random, no clock in the
@@ -174,7 +179,7 @@ class Searcher {
     return history[this.pos.stm * 4096 + moveFrom(m) * 64 + moveTo(m)];
   }
 
-  negamax(depth: number, alpha: number, beta: number, ply: number): number {
+  negateMax(depth: number, alpha: number, beta: number, ply: number): number {
     if (this.stopped) return 0;
     this.nodes++;
     this.checkTime();
@@ -234,7 +239,7 @@ class Searcher {
 
       pos.make(m);
       this.pushHash();
-      const score = -this.negamax(depth - 1, -beta, -alpha, ply + 1);
+      const score = -this.negateMax(depth - 1, -beta, -alpha, ply + 1);
       this.popHash();
       pos.unmake();
       if (this.stopped) return 0;
@@ -390,7 +395,7 @@ export function* searchSteps(fen: string, limits: SearchLimits): Generator<numbe
     for (const m of rootMoves) {
       searcher.pos.make(m);
       searcher.pushHash();
-      const score = -searcher.negamax(depth - 1, -INF, -alpha, 1);
+      const score = -searcher.negateMax(depth - 1, -INF, -alpha, 1);
       searcher.popHash();
       searcher.pos.unmake();
       if (searcher.stopped) break;
