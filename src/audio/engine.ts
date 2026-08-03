@@ -763,7 +763,20 @@ export class AudioEngine {
       this.musicBus = this.ctx.createGain();
       this.sfxBus = this.ctx.createGain();
       this.musicBus.connect(this.master);
-      this.sfxBus.connect(this.master);
+      // Duels stack cues by design — a capture can have an impact, a body fall
+      // and a vocal all sounding at once, and several cues already peak near
+      // full scale alone. Without a limiter on the way out those sums clip, and
+      // clipping on a percussive bus reads as a nasty buzz rather than as
+      // loudness. Fast attack so transients are caught, slow release so it does
+      // not pump between beats.
+      const limiter = this.ctx.createDynamicsCompressor();
+      limiter.threshold.value = -8;
+      limiter.knee.value = 6;
+      limiter.ratio.value = 12;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.18;
+      this.sfxBus.connect(limiter);
+      limiter.connect(this.master);
       this.master.connect(this.ctx.destination);
       this.applySettings(this.settings);
       this.score = new Score(this.ctx, this.musicBus, mulberry32(this.seed ^ 0x5c07e));
