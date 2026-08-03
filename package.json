@@ -10,7 +10,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "perft": "node --experimental-strip-types scripts/perft.ts",
-    "fuzz": "node --experimental-strip-types scripts/fuzz-desync.ts"
+    "fuzz": "node --experimental-strip-types scripts/fuzz-desync.ts",
+    "determinism": "node --experimental-strip-types scripts/determinism.ts",
+    "gauntlet": "node --experimental-strip-types scripts/ai-gauntlet.ts"
   },
   "devDependencies": {
     "@types/three": "^0.185.3",

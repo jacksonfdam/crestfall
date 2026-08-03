@@ -18,5 +18,7 @@ jobs:
         run: npm run perft
       - name: Desync fuzz
         run: npm run fuzz
+      - name: Duel determinism
+        run: npm run determinism 200
       - name: Production build
         run: npm run build
