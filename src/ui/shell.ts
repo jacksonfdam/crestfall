@@ -12,10 +12,56 @@
  */
 
 import type { AiTier, Color, GameMode, NewGameOptions, Settings } from '../core/contract.ts';
+import { MAX_NAME_LENGTH } from '../net/protocol.ts';
 import { button, el } from './dom.ts';
 import type { SettingsStore } from './settings.ts';
 
-export type ShellScreen = 'menu' | 'new' | 'credits' | 'settings' | 'help';
+/** Remembering the last name used spares repeat players the retyping. */
+const NAME_KEY = 'crestfall.playerName';
+
+function rememberedName(): string {
+  try {
+    return localStorage.getItem(NAME_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function rememberName(name: string): void {
+  try {
+    localStorage.setItem(NAME_KEY, name);
+  } catch {
+    /* private mode; the field just starts empty next time */
+  }
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error && err.message ? err.message : 'Something went wrong.';
+}
+
+export type ShellScreen =
+  | 'menu'
+  | 'new'
+  | 'challenge'
+  | 'join'
+  | 'credits'
+  | 'settings'
+  | 'help';
+
+/**
+ * Link-based challenges. The shell renders the forms and reports intent; the
+ * net module and integration own every side effect, including deciding when a
+ * match has actually started and the menu should get out of the way.
+ */
+export interface ShellNet {
+  /** False when no Supabase config is present; challenges are then offered as unavailable. */
+  available: boolean;
+  createChallenge(name: string, side: Color): Promise<{ code: string; link: string }>;
+  cancelChallenge(): Promise<void>;
+  joinChallenge(code: string, name: string): Promise<void>;
+  /** Code the player arrived with, when they opened a challenge link. */
+  pendingCode: string | null;
+}
 
 /**
  * Mute is derived state, not stored state: `masterVolume === 0` IS muted, so
@@ -30,6 +76,7 @@ export interface ShellAudio {
 export interface ShellDeps {
   settings: SettingsStore;
   audio: ShellAudio;
+  net: ShellNet;
   /** Start a game with these options and hand the screen back to the board. */
   onStartGame(opts: NewGameOptions): void;
   /** Menu opened/closed, so integration can hide or show the in-game panel. */
@@ -46,6 +93,12 @@ export interface ShellHandle {
 
 const ROOT_ID = 'cf-shell';
 const BAR_ID = 'cf-shell-bar';
+
+/** Integration measures this to reserve space for it in the HUD strip. */
+export const SHELL_BAR_ID = BAR_ID;
+
+/** One height for everything in the top strip, so nothing looks bolted on. */
+const HUD_ROW_HEIGHT = '2rem';
 
 const MODES: { value: GameMode; label: string; hint: string }[] = [
   {
@@ -114,15 +167,25 @@ const HELP_BOARD: [string, string][] = [
   ['Esc', 'Cancels the current selection. In the menu, steps back one screen.'],
 ];
 
-/** Tooltips for the in-game toolbar, matched on the labels it renders. */
-const TOOLTIPS: [string, string][] = [
-  ['New game', 'Start another game (type, AI level and side)'],
-  ['Undo', 'Take back the last move'],
-  ['Redo', 'Replay the move you took back'],
-  ['View:', 'Switch between the 3D board and the top-down 2D view'],
-  ['Duel speed:', 'Duel speed: 1×, 2× or instant'],
-  ['FEN', 'Copy or load a position (FEN)'],
-  ['PGN', 'Copy or load the game (PGN)'],
+/**
+ * The in-game toolbar, described: a role the HUD stylesheet can select on, and
+ * a tooltip. Matched on the labels the UI module renders, so a control that is
+ * renamed simply keeps its default appearance rather than being mislabelled.
+ */
+const TOOLBAR_CONTROLS: {
+  label: string;
+  role: string;
+  tip: string;
+  /** Replaces the label. The trailing ellipsis reads as truncation on a HUD. */
+  rename?: string;
+}[] = [
+  { label: 'New game', role: 'new-game', tip: 'Start another game (type, AI level and side)' },
+  { label: 'Undo', role: 'undo', tip: 'Take back the last move' },
+  { label: 'Redo', role: 'redo', tip: 'Replay the move you took back' },
+  { label: 'View:', role: 'view', tip: 'Switch between the 3D board and the top-down 2D view' },
+  { label: 'Duel speed:', role: 'speed', tip: 'Duel speed: 1×, 2× or instant' },
+  { label: 'FEN', role: 'fen', tip: 'Copy or load a position (FEN)', rename: 'FEN' },
+  { label: 'PGN', role: 'pgn', tip: 'Copy or load the game (PGN)', rename: 'PGN' },
 ];
 
 /**
@@ -137,7 +200,10 @@ const TOOLTIPS: [string, string][] = [
  * carries the display type; the UI sans keeps the controls legible.
  */
 const CSS = `
-#${ROOT_ID} {
+/* On :root, not on the panel: the floating Menu/Help bar is a sibling of the
+   overlay, and variables scoped to the overlay would resolve to nothing there —
+   which is exactly what made those two buttons look washed out. */
+:root {
   --cf-void: #0b0e14;
   --cf-oak: #241c15;
   --cf-iron: #3a4150;
@@ -148,7 +214,9 @@ const CSS = `
   --cf-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
     "Hoefler Text", Georgia, "Times New Roman", serif;
   --cf-ui: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
 
+#${ROOT_ID} {
   position: fixed;
   inset: 0;
   z-index: 8000;
@@ -341,6 +409,43 @@ const CSS = `
   height: 1.15rem;
   accent-color: var(--cf-gold);
 }
+#${ROOT_ID} .cf-shell-row input[type='text'] {
+  font-family: var(--cf-ui);
+  font-size: 0.92rem;
+  min-width: 190px;
+  color: var(--cf-bone);
+  background: #191510;
+  border: 1px solid var(--cf-iron);
+  border-radius: 3px;
+  padding: 0.4rem 0.5rem;
+}
+
+/* The invite link: monospace so a mistyped character is visible, and always
+   fully selectable for people whose clipboard permission is refused. */
+#${ROOT_ID} .cf-shell-link {
+  width: 100%;
+  margin: 0.2rem 0 0.9rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86rem;
+  color: var(--cf-bone);
+  background: #191510;
+  border: 1px solid var(--cf-gold);
+  border-radius: 3px;
+  padding: 0.55rem 0.6rem;
+}
+#${ROOT_ID} .cf-shell-waiting {
+  margin: 0;
+  color: var(--cf-gold);
+  font-size: 0.86rem;
+}
+#${ROOT_ID} .cf-shell-error {
+  margin: 0.6rem 0 0;
+  padding: 0.5rem 0.6rem;
+  border-left: 3px solid #ff9d8f;
+  background: rgba(255,157,143,0.08);
+  color: #ffc9c0;
+  font-size: 0.86rem;
+}
 
 #${ROOT_ID} .cf-shell-actions {
   display: flex;
@@ -395,14 +500,57 @@ const CSS = `
 
 #${BAR_ID} {
   position: fixed;
-  top: 0.85rem;
-  left: 0.85rem;
+  /* Sits on the HUD strip's own row; integration reserves the width. */
+  top: 0.4rem;
+  left: 0.6rem;
   z-index: 7000;
   display: flex;
-  gap: 0.4rem;
+  gap: 0.35rem;
 }
 #${BAR_ID}[hidden] { display: none; }
-#${BAR_ID} button { background: rgba(36,28,21,0.88); backdrop-filter: blur(6px); }
+/* These sit over the board next to the in-game toolbar, so they carry the same
+   weight as its buttons rather than receding into the scene. */
+#${BAR_ID} button {
+  box-sizing: border-box;
+  height: ${HUD_ROW_HEIGHT};
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.7rem;
+  border-radius: 3px;
+  background: rgba(30, 34, 43, 0.92);
+  border-color: #4a5263;
+  color: #e9e6dc;
+  font-size: 0.85rem;
+  font-weight: 600;
+  backdrop-filter: blur(6px);
+}
+#${BAR_ID} button:hover { background: rgba(51, 58, 71, 0.95); border-color: var(--cf-gold); }
+
+/* Landscape phones are wide but very short, so the display scale has to come
+   down or the menu spills past the fold. */
+@media (max-height: 540px) {
+  #${ROOT_ID} { padding: 0.55rem; }
+  #${ROOT_ID} .cf-shell-panel { padding: 0.9rem 1.1rem 1rem; max-height: 95dvh; }
+  #${ROOT_ID} h1 { font-size: 1.55rem; letter-spacing: 0.14em; }
+  #${ROOT_ID} .cf-shell-sub { font-size: 0.8rem; margin-bottom: 0.75rem; }
+  #${ROOT_ID} h2 {
+    font-size: 1.05rem;
+    margin-bottom: 0.7rem;
+    padding-bottom: 0.35rem;
+  }
+  #${ROOT_ID} h3 { margin: 0.85rem 0 0.35rem; }
+  #${ROOT_ID} p { font-size: 0.82rem; margin-bottom: 0.5rem; }
+  #${ROOT_ID} .cf-shell-nav { gap: 0.3rem; }
+  #${ROOT_ID} .cf-shell-nav button { padding: 0.45rem 0.75rem; font-size: 0.92rem; }
+  #${ROOT_ID} .cf-shell-choice { padding: 0.35rem 0.5rem; font-size: 0.86rem; }
+  #${ROOT_ID} .cf-shell-row { padding: 0.35rem 0; font-size: 0.86rem; }
+  #${ROOT_ID} .cf-shell-actions { margin-top: 0.85rem; }
+  #${ROOT_ID} .cf-shell-actions button { font-size: 0.9rem; padding: 0.5rem 0.8rem; }
+  #${ROOT_ID} dl { font-size: 0.82rem; }
+  #${ROOT_ID} dt { margin-top: 0.55rem; }
+  #${BAR_ID} { top: 0.45rem; left: 0.45rem; }
+  #${BAR_ID} button { padding: 0.35rem 0.6rem; font-size: 0.8rem; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   #${ROOT_ID} .cf-shell-panel { animation: none; }
@@ -417,14 +565,18 @@ function randomSeed(): number {
 }
 
 /**
- * Explain the in-game toolbar in place. Matched on the labels the UI module
- * renders, so an unmatched control is left alone rather than mislabelled.
+ * Tag and explain the in-game toolbar in place: `data-cf-role` is what the HUD
+ * stylesheet uses to decide which controls belong on screen during a match, and
+ * the title is the plain-language explanation of each one.
  */
-export function applyToolbarTooltips(mount: HTMLElement): void {
+export function decorateToolbar(mount: HTMLElement): void {
   for (const control of mount.querySelectorAll('button, select')) {
     const text = control.textContent ?? '';
-    const hit = TOOLTIPS.find(([label]) => text.startsWith(label));
-    if (hit && !control.getAttribute('title')) control.setAttribute('title', hit[1]);
+    const hit = TOOLBAR_CONTROLS.find((c) => text.startsWith(c.label));
+    if (!hit) continue;
+    control.setAttribute('data-cf-role', hit.role);
+    if (hit.rename && control.textContent !== hit.rename) control.textContent = hit.rename;
+    if (!control.getAttribute('title')) control.setAttribute('title', hit.tip);
   }
   const duels = mount.querySelector('#cf-duels');
   duels?.setAttribute('title', 'Animate duels only for the first N moves of the game');
@@ -467,6 +619,26 @@ export function createShell(deps: ShellDeps): ShellHandle {
   document.body.append(root, bar);
 
   let screen: ShellScreen = 'menu';
+
+  interface ChallengeState {
+    name: string;
+    side: Color;
+    /** Set once the invite exists; the screen then shows the link and waits. */
+    link: string | null;
+    error: string | null;
+    busy: boolean;
+    copied: boolean;
+  }
+  const freshChallenge = (): ChallengeState => ({
+    name: rememberedName(),
+    side: 'w',
+    link: null,
+    error: null,
+    busy: false,
+    copied: false,
+  });
+  /** Survives re-renders; render() rebuilds the DOM, not the entered values. */
+  let challenge = freshChallenge();
 
   // ── Small builders ────────────────────────────────────────────────────────
 
@@ -558,6 +730,23 @@ export function createShell(deps: ShellDeps): ShellHandle {
     return button('Back', () => open('menu'));
   }
 
+  function textRow(
+    label: string,
+    value: string,
+    onInput: (v: string) => void,
+    id: string,
+    attrs: Record<string, string> = {},
+  ): HTMLElement {
+    const input = el('input', { type: 'text', autocomplete: 'nickname', ...attrs });
+    input.value = value;
+    input.addEventListener('input', () => onInput(input.value));
+    return row(label, input, id);
+  }
+
+  function errorLine(text: string): HTMLElement {
+    return el('p', { class: 'cf-shell-error', role: 'alert' }, [text]);
+  }
+
   // ── Screens ───────────────────────────────────────────────────────────────
 
   function renderMenu(): void {
@@ -567,6 +756,11 @@ export function createShell(deps: ShellDeps): ShellHandle {
     }
     nav.append(
       button('New game', () => open('new'), deps.hasGame() ? {} : { class: 'cf-primary' }),
+      button('Challenge a friend', () => open('challenge'), {
+        title: deps.net.available
+          ? 'Create a link that starts a game with a friend'
+          : 'Needs a Supabase connection — see docs/LOCAL_DEVELOPMENT.md',
+      }),
       button('Credits', () => open('credits')),
       button('Settings', () => open('settings')),
       button('Help', () => open('help')),
@@ -768,9 +962,204 @@ export function createShell(deps: ShellDeps): ShellHandle {
     );
   }
 
+  function renderChallenge(): void {
+    body.append(heading('Challenge a friend'));
+
+    if (!deps.net.available) {
+      body.append(
+        el('p', {}, [
+          'Challenges need a Supabase connection, and this build has none ' +
+            'configured. See docs/LOCAL_DEVELOPMENT.md to point it at a project.',
+        ]),
+        actions(backButton()),
+      );
+      return;
+    }
+
+    if (challenge.link) {
+      const field = el('input', {
+        type: 'text',
+        readonly: 'readonly',
+        class: 'cf-shell-link',
+        'aria-label': 'Challenge link',
+      });
+      field.value = challenge.link;
+      const status = el('p', { class: 'cf-shell-waiting', role: 'status' }, [
+        challenge.copied ? 'Link copied. Waiting for them to join…' : 'Waiting for them to join…',
+      ]);
+      body.append(
+        el('p', {}, [
+          'Send this link to your friend. It can be claimed once, and only ' +
+            'within the next 15 minutes. They will not need an account — just a name.',
+        ]),
+        field,
+        status,
+        actions(
+          button(
+            'Copy link',
+            () => {
+              const link = challenge.link ?? '';
+              navigator.clipboard.writeText(link).then(
+                () => {
+                  challenge.copied = true;
+                  status.textContent = 'Link copied. Waiting for them to join…';
+                },
+                () => {
+                  status.textContent = 'Could not copy — select the link and copy it manually.';
+                  field.select();
+                },
+              );
+            },
+            { class: 'cf-primary' },
+          ),
+          button('Cancel', () => {
+            void deps.net.cancelChallenge();
+            challenge = freshChallenge();
+            open('menu');
+          }),
+        ),
+      );
+      return;
+    }
+
+    const nameInput = textRow(
+      'Your name',
+      challenge.name,
+      (v) => {
+        challenge.name = v;
+      },
+      'cf-shell-host-name',
+      { maxlength: String(MAX_NAME_LENGTH), placeholder: 'Shown to your friend' },
+    );
+
+    const sideFields = el('fieldset', {}, [el('legend', {}, ['You play'])]);
+    for (const sd of SIDES) {
+      sideFields.append(
+        choice(
+          'cf-shell-host-side',
+          sd.value,
+          sd.label,
+          undefined,
+          sd.value === challenge.side,
+          () => {
+            challenge.side = sd.value;
+          },
+        ).wrap,
+      );
+    }
+
+    body.append(
+      el('p', {}, [
+        'Create a link, send it to a friend, and the game starts as soon as ' +
+          'they open it. No account, no sign-up — you each just type a name.',
+      ]),
+      nameInput,
+      sideFields,
+    );
+    if (challenge.error) body.append(errorLine(challenge.error));
+    body.append(
+      actions(
+        button(
+          challenge.busy ? 'Creating…' : 'Create link',
+          () => {
+            if (challenge.busy) return;
+            const name = challenge.name.trim();
+            if (!name) {
+              challenge.error = 'Enter a name first.';
+              render();
+              return;
+            }
+            challenge.busy = true;
+            challenge.error = null;
+            render();
+            deps.net.createChallenge(name, challenge.side).then(
+              ({ link }) => {
+                rememberName(name);
+                challenge.busy = false;
+                challenge.link = link;
+                render();
+              },
+              (err: unknown) => {
+                challenge.busy = false;
+                challenge.error = messageOf(err);
+                render();
+              },
+            );
+          },
+          { class: 'cf-primary' },
+        ),
+        backButton(),
+      ),
+    );
+  }
+
+  function renderJoin(): void {
+    const code = deps.net.pendingCode;
+    body.append(heading('A challenge awaits'));
+
+    if (!code) {
+      body.append(
+        el('p', {}, ['That challenge link is not valid.']),
+        actions(button('To the menu', () => open('menu'))),
+      );
+      return;
+    }
+
+    body.append(
+      el('p', {}, [
+        'Someone has challenged you to a duel. Enter a name to accept — no ' +
+          'account needed. Links expire 15 minutes after they are created.',
+      ]),
+      textRow(
+        'Your name',
+        challenge.name,
+        (v) => {
+          challenge.name = v;
+        },
+        'cf-shell-guest-name',
+        { maxlength: String(MAX_NAME_LENGTH), placeholder: 'Shown to your opponent' },
+      ),
+    );
+    if (challenge.error) body.append(errorLine(challenge.error));
+    body.append(
+      actions(
+        button(
+          challenge.busy ? 'Joining…' : 'Accept',
+          () => {
+            if (challenge.busy) return;
+            const name = challenge.name.trim();
+            if (!name) {
+              challenge.error = 'Enter a name first.';
+              render();
+              return;
+            }
+            challenge.busy = true;
+            challenge.error = null;
+            render();
+            deps.net.joinChallenge(code, name).then(
+              () => {
+                rememberName(name);
+                challenge.busy = false;
+              },
+              (err: unknown) => {
+                challenge.busy = false;
+                challenge.error = messageOf(err);
+                render();
+              },
+            );
+          },
+          { class: 'cf-primary' },
+        ),
+        button('Play alone instead', () => open('menu')),
+      ),
+    );
+  }
+
   const SCREENS: Record<ShellScreen, () => void> = {
     menu: renderMenu,
     new: renderNewGame,
+    challenge: renderChallenge,
+    join: renderJoin,
     credits: renderCredits,
     settings: renderSettings,
     help: renderHelp,
