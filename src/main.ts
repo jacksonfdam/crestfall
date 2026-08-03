@@ -101,6 +101,23 @@ html, body {
 #ui-root { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
 #ui-root > * { pointer-events: auto; }
 
+/* One palette for the whole product. src/ui/style.css was written as a
+   standalone panel and leans cool — blue-grey surfaces and a sky-blue focus
+   ring — which reads as a web app sitting on top of a Norse board rather than
+   part of it. These are its own variable names, re-pointed at the scene's
+   values: charred oak, warm iron, bone, parchment, ember gold. Everything
+   inside .cf-ui inherits them, dialogs included. */
+#ui-root .cf-ui {
+  --cf-bg: #14110e;
+  --cf-panel: #1e1a15;
+  --cf-panel-edge: #4a4034;
+  --cf-text: #efe8d4;
+  --cf-muted: #a9a294;
+  --cf-accent: #d9a441;
+  --cf-focus: #ffe3a3;
+  --cf-danger: #c8624a;
+}
+
 /* src/ui/style.css lays .cf-ui out as an opaque sidebar. Over a full-bleed
    board it becomes a slim strip along the top instead, fading into the scene
    rather than cutting a panel out of it. */
@@ -141,11 +158,16 @@ html, body {
   border-radius: 3px;
   font-size: 0.85rem;
 }
+/* The banner is a line of narration, not a control, so it carries the display
+   face — that is what ties the strip to the menu instead of leaving it looking
+   like browser chrome parked over the board. */
 #ui-root .cf-banner {
   margin: 0;
   border-left-width: 3px;
   white-space: nowrap;
-  font-size: 0.85rem;
+  font-family: var(--cf-display);
+  font-size: 0.95rem;
+  letter-spacing: 0.03em;
 }
 #ui-root .cf-toolbar { margin: 0; padding: 0; gap: 0.35rem; }
 
@@ -350,13 +372,8 @@ function clock(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
-/** How a finished game reads, and what was worth counting along the way. */
-function describeResult(
-  e: GameEvent,
-  history: MoveRecord[],
-  elapsedMs: number,
-  naming: { forSide: Color | null; opponent: string | null },
-): Pick<GameOverSummary, 'headline' | 'outcome' | 'decisive' | 'stats'> {
+/** What was worth counting, however the game ended. */
+function collectStats(history: MoveRecord[], elapsedMs: number): [string, string][] {
   const captures = { w: 0, b: 0 };
   let checks = 0;
   let promotions = 0;
@@ -367,29 +384,11 @@ function describeResult(
     if (r.promotion) promotions++;
     if (r.castle) castles++;
   }
-  const duels = captures.w + captures.b;
-
-  // After a mate the side to move is the mated one, so the winner is the other.
-  const winner = other(e.turn);
-  const namedWinner =
-    naming.forSide === null
-      ? `${sideLabel(winner)} wins`
-      : winner === naming.forSide
-        ? 'You win'
-        : `${naming.opponent ?? sideLabel(winner)} wins`;
-
-  const DRAWS: Record<string, [string, string]> = {
-    stalemate: ['Stalemate', 'Nobody wins'],
-    'draw-fifty': ['Draw', 'Fifty moves without progress'],
-    'draw-repetition': ['Draw', 'The same position, three times'],
-    'draw-material': ['Draw', 'Not enough left to force a mate'],
-  };
-  const draw = DRAWS[e.status];
 
   const stats: [string, string][] = [
     ['Moves', String(Math.ceil(history.length / 2))],
     ['Duration', clock(elapsedMs)],
-    ['Duels fought', String(duels)],
+    ['Duels fought', String(captures.w + captures.b)],
     // Split per side rather than "1 · 0", which leaves the reader guessing
     // which number belongs to whom.
     ['Ash captured', String(captures.w)],
@@ -398,12 +397,39 @@ function describeResult(
   if (checks > 0) stats.push(['Checks given', String(checks)]);
   if (promotions > 0) stats.push(['Promotions', String(promotions)]);
   if (castles > 0) stats.push(['Castles', String(castles)]);
+  return stats;
+}
+
+/** Names the winner from the reader's point of view when there is one. */
+function nameWinner(
+  winner: Color,
+  naming: { forSide: Color | null; opponent: string | null },
+): string {
+  if (naming.forSide === null) return `${sideLabel(winner)} wins`;
+  return winner === naming.forSide ? 'You win' : `${naming.opponent ?? sideLabel(winner)} wins`;
+}
+
+/** How a finished game reads. */
+function describeResult(
+  e: GameEvent,
+  history: MoveRecord[],
+  elapsedMs: number,
+  naming: { forSide: Color | null; opponent: string | null },
+): Pick<GameOverSummary, 'headline' | 'outcome' | 'decisive' | 'stats'> {
+  const DRAWS: Record<string, [string, string]> = {
+    stalemate: ['Stalemate', 'Nobody wins'],
+    'draw-fifty': ['Draw', 'Fifty moves without progress'],
+    'draw-repetition': ['Draw', 'The same position, three times'],
+    'draw-material': ['Draw', 'Not enough left to force a mate'],
+  };
+  const draw = DRAWS[e.status];
 
   return {
     headline: draw ? draw[0] : 'Checkmate',
-    outcome: draw ? draw[1] : namedWinner,
+    // After a mate the side to move is the mated one, so the winner is the other.
+    outcome: draw ? draw[1] : nameWinner(other(e.turn), naming),
     decisive: !draw,
-    stats,
+    stats: collectStats(history, elapsedMs),
   };
 }
 
@@ -492,7 +518,9 @@ function boot(): void {
    */
   let gameSeed = randomSeed();
   const api: GameApi = {
-    tryMove: (from, to, promotion) => controller.tryMove(from, to, promotion),
+    // A conceded game is over even though the position is still legal.
+    tryMove: (from, to, promotion) =>
+      resigned ? false : controller.tryMove(from, to, promotion),
     legalTargets: (from) => controller.legalTargets(from),
     needsPromotion: (from, to) => controller.needsPromotion(from, to),
     // Taking moves back would desync the two boards, and there is no protocol
@@ -811,6 +839,56 @@ function boot(): void {
    * fall quiet.
    */
   let pendingResult: GameEvent | null = null;
+  /**
+   * Set when a player concedes. The engine has no notion of resignation — the
+   * position is still legal and playable — so the refusal to accept further
+   * moves lives here, in the command façade.
+   */
+  let resigned = false;
+
+  /** Whose concession it is. In hotseat, the player to move is the one giving up. */
+  function resigningSide(): Color {
+    if (matchLive) return localSide;
+    if (lastGameOptions?.mode === 'vs-ai') return lastGameOptions.humanColor ?? 'w';
+    return api.getState().turn;
+  }
+
+  function resign(): void {
+    if (resigned || !gameStarted) return;
+    resigned = true;
+    const side = resigningSide();
+    const winner = other(side);
+    const wasOnline = matchLive;
+    // Read before the session is dropped below, or the name is gone.
+    const opponentName = session?.opponent ?? null;
+
+    if (wasOnline && session) {
+      // The protocol already has a word for this, so the opponent is told
+      // properly rather than just seeing the connection go quiet.
+      const leaving = session;
+      session = null;
+      matchLive = false;
+      opponentIsRemote = false;
+      void leaving.leave('resigned');
+    }
+
+    document.body.dataset.cfGameOver = 'true';
+    audio.play('game-over-win');
+    shell.showGameOver({
+      headline: 'Resignation',
+      outcome: wasOnline
+        ? `You resign — ${opponentName ?? sideLabel(winner)} wins`
+        : `${sideLabel(side)} resigns — ${sideLabel(winner)} wins`,
+      decisive: true,
+      stats: collectStats(api.history(), performance.now() - gameStartedAt),
+      fen: api.exportFEN(),
+      pgn: api.exportPGN(),
+      canRematch: !wasOnline,
+      rematchHint: wasOnline
+        ? 'A rematch needs a fresh challenge link — there is no way to agree one mid-match.'
+        : undefined,
+    });
+  }
 
   function maybeShowResult(): void {
     const e = pendingResult;
@@ -882,6 +960,7 @@ function boot(): void {
     localSide = info.localSide;
     gameStartedAt = performance.now();
     gameStarted = true;
+    resigned = false;
     ensureUI();
     api.newGame({ mode: 'online', seed: info.seed, humanColor: info.localSide });
     armAudio();
@@ -943,6 +1022,7 @@ function boot(): void {
       lastGameOptions = opts;
       gameStartedAt = performance.now();
       gameStarted = true;
+      resigned = false;
       ensureUI();
       api.newGame(opts);
       armAudio();
@@ -954,11 +1034,15 @@ function boot(): void {
       lastGameOptions = opts;
       gameStartedAt = performance.now();
       gameStarted = true;
+      resigned = false;
       ensureUI();
       api.newGame(opts);
       shell.close();
       armAudio();
     },
+    onResign: resign,
+    canResign: () =>
+      gameStarted && !resigned && api.getState().status === 'active',
     onVisibilityChange: (open) => {
       // Hiding #ui-root collapses the sidebar, so the board gets the full width
       // behind the floating menu.
