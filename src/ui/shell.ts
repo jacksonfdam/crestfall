@@ -104,6 +104,10 @@ export interface ShellDeps {
   onStartGame(opts: NewGameOptions): void;
   /** Play the same setup again, with a fresh seed. */
   onRematch(): void;
+  /** Concede the game in progress. Integration decides what the result reads as. */
+  onResign(): void;
+  /** True while a game is running and undecided, so resigning is meaningful. */
+  canResign(): boolean;
   /** Menu opened/closed, so integration can hide or show the in-game panel. */
   onVisibilityChange(open: boolean): void;
   /** True once a game is running — gates "Continuar" and Esc-to-close. */
@@ -277,13 +281,13 @@ const CSS = `
 :root {
   --cf-void: #0b0e14;
   --cf-oak: #241c15;
-  --cf-iron: #3a4150;
+  --cf-iron: #4a4034;
   --cf-bone: #efe8d4;
   --cf-parchment: #a9a294;
   --cf-gold: #d9a441;
-  --cf-focus: #8fc1ee;
-  --cf-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
-    "Hoefler Text", Georgia, "Times New Roman", serif;
+  --cf-focus: #ffe3a3;
+  --cf-display: "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Palatino,
+    "Book Antiqua", Georgia, "Times New Roman", serif;
   --cf-ui: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
@@ -395,6 +399,47 @@ const CSS = `
   background: linear-gradient(180deg, rgba(217,164,65,0.14), rgba(217,164,65,0.05));
   border-color: rgba(217,164,65,0.5);
 }
+/* Resigning should be reachable, not prominent. */
+#${ROOT_ID} .cf-shell-nav button.cf-quiet {
+  font-size: 0.95rem;
+  color: var(--cf-parchment);
+  background: none;
+  border-color: rgba(239, 232, 212, 0.12);
+}
+#${ROOT_ID} .cf-shell-nav button.cf-quiet:hover {
+  color: #f0bfae;
+  border-color: rgba(200, 98, 74, 0.55);
+  background: rgba(200, 98, 74, 0.08);
+}
+#${ROOT_ID} .cf-shell-confirm {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(200, 98, 74, 0.45);
+  border-radius: 3px;
+  background: rgba(200, 98, 74, 0.08);
+  font-size: 0.88rem;
+  color: var(--cf-bone);
+}
+#${ROOT_ID} .cf-shell-confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+#${ROOT_ID} .cf-shell-confirm-actions button {
+  flex: 1 1 auto;
+  font-family: var(--cf-ui);
+  font-size: 0.85rem;
+  text-transform: none;
+  letter-spacing: 0;
+  text-align: center;
+  padding: 0.4rem 0.7rem;
+}
+#${ROOT_ID} button.cf-danger {
+  border-color: #c8624a;
+  color: #f7d9cf;
+  background: rgba(200, 98, 74, 0.2);
+}
+#${ROOT_ID} button.cf-danger:hover { background: rgba(200, 98, 74, 0.32); }
+
 #${ROOT_ID} .cf-shell-nav button.cf-primary {
   border-color: var(--cf-gold);
   color: #f7ecd2;
@@ -482,11 +527,33 @@ const CSS = `
   padding: 0.32rem 0.45rem;
   accent-color: var(--cf-gold);
 }
-#${ROOT_ID} .cf-shell-row input[type='checkbox'] {
+/* A native checkbox is the one control the platform paints in its own colours,
+   which puts a stock blue-grey square in the middle of a gilt panel. Drawn here
+   instead, with the tick as a clip-path so it needs no glyph. */
+#${ROOT_ID} input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
   width: 1.15rem;
   height: 1.15rem;
-  accent-color: var(--cf-gold);
+  margin: 0;
+  border: 1px solid var(--cf-iron);
+  border-radius: 2px;
+  background: #191510;
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
 }
+#${ROOT_ID} input[type='checkbox']::before {
+  content: '';
+  width: 0.66rem;
+  height: 0.66rem;
+  transform: scale(0);
+  background: var(--cf-gold);
+  clip-path: polygon(14% 44%, 0 58%, 43% 100%, 100% 16%, 86% 0, 43% 71%);
+}
+#${ROOT_ID} input[type='checkbox']:checked { border-color: var(--cf-gold); }
+#${ROOT_ID} input[type='checkbox']:checked::before { transform: scale(1); }
+#${ROOT_ID} input[type='checkbox']:hover { border-color: var(--cf-parchment); }
 #${ROOT_ID} .cf-shell-row input[type='text'] {
   font-family: var(--cf-ui);
   font-size: 0.92rem;
@@ -519,9 +586,9 @@ const CSS = `
 #${ROOT_ID} .cf-shell-error {
   margin: 0.6rem 0 0;
   padding: 0.5rem 0.6rem;
-  border-left: 3px solid #ff9d8f;
-  background: rgba(255,157,143,0.08);
-  color: #ffc9c0;
+  border-left: 3px solid #c8624a;
+  background: rgba(200,98,74,0.1);
+  color: #f0bfae;
   font-size: 0.86rem;
 }
 
@@ -698,14 +765,14 @@ const CSS = `
   align-items: center;
   padding: 0 0.7rem;
   border-radius: 3px;
-  background: rgba(30, 34, 43, 0.92);
-  border-color: #4a5263;
+  background: rgba(30, 26, 21, 0.92);
+  border-color: #5a4c3c;
   color: #e9e6dc;
   font-size: 0.85rem;
   font-weight: 600;
   backdrop-filter: blur(6px);
 }
-#${BAR_ID} button:hover { background: rgba(51, 58, 71, 0.95); border-color: var(--cf-gold); }
+#${BAR_ID} button:hover { background: rgba(46, 38, 29, 0.95); border-color: var(--cf-gold); }
 
 /* Landscape phones are wide but very short, so the display scale has to come
    down or the menu spills past the fold. */
@@ -825,6 +892,8 @@ export function createShell(deps: ShellDeps): ShellHandle {
   let challenge = freshChallenge();
   /** The result being presented, if any. */
   let over: GameOverSummary | null = null;
+  /** Resigning asks once; the question lives on the menu, not in a dialog. */
+  let confirmingResign = false;
 
   // ── Small builders ────────────────────────────────────────────────────────
 
@@ -954,6 +1023,35 @@ export function createShell(deps: ShellDeps): ShellHandle {
       button('Settings', () => open('settings')),
       button('Help', () => open('help')),
     );
+
+    // Conceding is irreversible, so it asks once. The confirmation replaces the
+    // entry in place rather than opening a dialog over a dialog.
+    if (deps.canResign()) {
+      if (confirmingResign) {
+        nav.append(
+          el('div', { class: 'cf-shell-confirm' }, [
+            el('span', {}, ['Resign the game? The result will stand.']),
+            el('div', { class: 'cf-shell-confirm-actions' }, [
+              button('Yes, resign', () => {
+                confirmingResign = false;
+                deps.onResign();
+              }, { class: 'cf-danger' }),
+              button('Keep playing', () => {
+                confirmingResign = false;
+                render();
+              }),
+            ]),
+          ]),
+        );
+      } else {
+        nav.append(
+          button('Resign', () => {
+            confirmingResign = true;
+            render();
+          }, { class: 'cf-quiet' }),
+        );
+      }
+    }
     body.append(
       ...title('Crestfall', 'Chess where every capture is a duel'),
       nav,
