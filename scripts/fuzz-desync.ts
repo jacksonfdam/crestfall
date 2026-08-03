@@ -51,6 +51,9 @@ function headlessStage(reducedMotion: boolean): Stage {
   w.variantHook = null;
   w.viewMode = '3d';
   w.reducedMotion = reducedMotion;
+  // Field initializers never ran (the constructor is bypassed), and
+  // syncBoard's stale-rig matching reaches for this scratch vector.
+  w.scratchVec3 = new THREE.Vector3();
   return s;
 }
 
