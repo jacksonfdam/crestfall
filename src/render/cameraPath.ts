@@ -53,3 +53,44 @@ export function arcCamera(
     .multiplyScalar(ra + (rb - ra) * k)
     .add(look);
 }
+
+/**
+ * Shove `eye` out of one standing figure, modelled as a vertical cylinder of
+ * `radius` rising `height` from (`cx`, `baseY`, `cz`). Returns true if it moved.
+ *
+ * This is the bystander half of the duel-camera problem. arcCamera keeps the
+ * move clear of the two fighters, but the framing is derived purely from their
+ * staging, so its mark regularly lands on a square that happens to be occupied
+ * by a spectator. Measured in a live demonstration game before this existed: the
+ * eye reached 0.053 from a huscarl's head — inside the 0.1 near plane, which
+ * slices the body open and fills the shot — with that huscarl 3.03 units from
+ * the duel centre. Roughly a third of duel frames had some piece within 0.35.
+ *
+ * The push is horizontal only: the framing's eye height carries the shot, and
+ * lifting the camera over a figure would break the low across-the-approach angle
+ * the duel grammar is built on. An eye already clear above the figure's head is
+ * left alone, so the wide part of a cut-in is never distorted.
+ */
+export function keepOutOfFigure(
+  eye: Vector3,
+  cx: number,
+  cz: number,
+  baseY: number,
+  height: number,
+  radius: number,
+  lift: number,
+): boolean {
+  if (eye.y > baseY + height + lift) return false;
+  const dx = eye.x - cx;
+  const dz = eye.z - cz;
+  const d = Math.hypot(dx, dz);
+  if (d >= radius) return false;
+  if (d > 1e-4) {
+    eye.x = cx + (dx / d) * radius;
+    eye.z = cz + (dz / d) * radius;
+  } else {
+    // Dead on the axis: any way out beats standing inside the body.
+    eye.x = cx + radius;
+  }
+  return true;
+}

@@ -17,7 +17,7 @@ import { PIECE_CHARACTER } from '../core/contract.ts';
 import type { CharacterRig, CharacterOptions, DuelCameraRig } from '../core/stage.ts';
 import { mulberry32 } from '../core/prng.ts';
 import { squareToWorld, worldToSquare } from './boardMath.ts';
-import { arcCamera } from './cameraPath.ts';
+import { arcCamera, keepOutOfFigure } from './cameraPath.ts';
 import { endTravel, gaitFor, stepTravel, travelSeconds, type Gait } from './locomotion.ts';
 
 export type ViewMode = '3d' | '2d';
@@ -59,6 +59,14 @@ interface Glide {
   heading: number;
 }
 const CAMERA_RETURN_SECONDS = 0.45;
+/**
+ * How far the duel camera is held off a bystander's standing axis. Bodies reach
+ * about 0.4 out from the axis, so this leaves a margin the 0.1 near plane can
+ * live with while still being a small enough nudge to keep the framing.
+ */
+const BYSTANDER_KEEP_OUT = 0.75;
+/** Above a bystander's head by this much, the eye clears it and is left alone. */
+const BYSTANDER_KEEP_OUT_LIFT = 0.1;
 const ORBIT_MIN_POLAR = 0.25;
 const ORBIT_MAX_POLAR = 1.32;
 const ORBIT_MIN_RADIUS = 6.5;
@@ -281,6 +289,8 @@ export class Stage {
   private readonly returnFromPos = new THREE.Vector3();
   private readonly returnFromLook = new THREE.Vector3();
   private readonly shakeOffset = new THREE.Vector3();
+  /** Scratch for avoidBystanders, which runs per duel frame. */
+  private readonly avoidVec = new THREE.Vector3();
 
   /** Scratch vectors for hot paths — the render loop and pointer picking. */
   private readonly scratchVec3 = new THREE.Vector3();
@@ -869,6 +879,45 @@ export class Stage {
     };
   }
 
+  /**
+   * Shove the duel eye out of any bystander it would stand inside.
+   *
+   * The duel camera frames purely off the two combatants' staging, so its mark
+   * regularly lands on a square that happens to be occupied. Measured in a live
+   * demonstration game: the eye reached 0.053 from a huscarl's head — inside the
+   * 0.1 near plane, which slices the body open and fills the shot — with that
+   * huscarl 3.03 units from the duel centre, i.e. a spectator rather than a
+   * fighter. Roughly a third of duel frames had some piece within 0.35.
+   *
+   * Visibility is the combatant test: main.ts hides the board rig standing in
+   * for each duel overlay, so anything still visible here is a bystander. The
+   * two fighters are handled by cameraPath.arcCamera, which keeps the whole move
+   * outside their framing radius, and they sit well beyond KEEP_OUT anyway.
+   *
+   * Two passes, because shoving clear of one neighbour can walk into the next.
+   */
+  private avoidBystanders(eye: THREE.Vector3): void {
+    for (let pass = 0; pass < 2; pass++) {
+      let moved = false;
+      for (const entry of this.pieces.values()) {
+        const root = entry.rig.root;
+        if (!root.visible) continue;
+        const at = root.getWorldPosition(this.avoidVec);
+        moved =
+          keepOutOfFigure(
+            eye,
+            at.x,
+            at.z,
+            at.y,
+            entry.rig.height,
+            BYSTANDER_KEEP_OUT,
+            BYSTANDER_KEEP_OUT_LIFT,
+          ) || moved;
+      }
+      if (!moved) return;
+    }
+  }
+
   private orbitPosition(out: THREE.Vector3): THREE.Vector3 {
     const sp = Math.sin(this.orbitPolar);
     out.set(
@@ -916,6 +965,8 @@ export class Stage {
 
     if (this.duelActive) {
       this.perspCamera.position.copy(this.duelDesiredPos).add(this.shakeOffset);
+      // After the shake, so a shove cannot rattle back into a body.
+      this.avoidBystanders(this.perspCamera.position);
       this.perspCamera.lookAt(this.duelDesiredLook);
       this.shakeOffset.multiplyScalar(Math.max(0, 1 - dt * 10));
     } else if (this.returning) {
@@ -925,6 +976,7 @@ export class Stage {
       const look = this.scratchVec3b.lerpVectors(this.returnFromLook, this.orbitTarget, k);
       // Same arc on the way out: the victor is still standing on the square.
       arcCamera(this.perspCamera.position, this.returnFromPos, target, look, k);
+      this.avoidBystanders(this.perspCamera.position);
       this.perspCamera.lookAt(look);
       if (this.returnT >= 1) this.returning = false;
     } else {
