@@ -180,6 +180,26 @@ export function stepTravel(
       if (b.spine) b.spine.rotation.x += 0.07 * amp;
       if (b.head) b.head.rotation.x -= 0.05 * amp;
       if (b.cloak) b.cloak.rotation.x -= 0.1 * amp;
+      // Wings, if she has any. One slow beat per stride, lifting with the bob
+      // and easing open at the top — a valkyrie carries some of her own weight
+      // rather than marching. Without this she strode with her wings welded
+      // shut, which is most of why the queen read as wrong. The flap axis is
+      // roll, mirrored per side, matching what the duel rows nudge.
+      if (b.wingL || b.wingR) {
+        const beat = Math.sin(cycle * Math.PI) * amp;
+        const open = 0.34 * beat;
+        const sweep = 0.12 * beat;
+        if (b.wingL) {
+          b.wingL.rotation.z += open;
+          b.wingL.rotation.x -= sweep;
+        }
+        if (b.wingR) {
+          b.wingR.rotation.z -= open;
+          b.wingR.rotation.x -= sweep;
+        }
+        // A little of the beat carries into the body, so it looks like lift.
+        bob += 0.012 * beat;
+      }
       break;
     }
     case 'ride': {
