@@ -28,6 +28,7 @@ import {
   camera,
   cueAt,
   DUR,
+  mountLegs,
   nudge,
   placeAt,
   resolve,
@@ -311,6 +312,7 @@ const QXN_A: DuelScript = {
       const run = easeInCubic(phase(t, 0.12, 0.5));
       victimGuard(ctx, s, lerp(-2.0, 0.2, run));
       const gallop = Math.sin(t * 45);
+      mountLegs(ctx.victim, t * 45, 0.5);
       nudge(ctx.victim, 'mount', 0.07 * gallop);
       nudge(ctx.victim, 'mountHead', 0.12 * gallop);
       // It shies off the shield edge and the rider keeps going forward.
@@ -367,6 +369,7 @@ const QXN_B: DuelScript = {
       const run = easeInCubic(phase(t, 0.1, 0.52));
       victimGuard(ctx, s, lerp(-2.2, 0.6, run));
       const gallop = Math.sin(t * 46);
+      mountLegs(ctx.victim, t * 46, 0.5);
       nudge(ctx.victim, 'mount', 0.07 * gallop);
       nudge(ctx.victim, 'mountHead', 0.12 * gallop);
       // He swings up at her as she goes over, and misses.

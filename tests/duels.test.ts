@@ -17,6 +17,8 @@ import { mulberry32 } from '../src/core/prng.ts';
 import { buildCharacter } from '../src/chars/index.ts';
 import type { CharacterRig, DuelContext, DuelScript } from '../src/core/stage.ts';
 import { CELL_KEYS, DUEL_MATRIX, validateMatrix } from '../src/duels/index.ts';
+import { defeatVictim } from '../src/duels/rows/defeat.ts';
+import { stageDuel } from '../src/duels/rows/support.ts';
 import { arcCamera } from '../src/render/cameraPath.ts';
 import { squareToWorld } from '../src/render/boardMath.ts';
 
@@ -315,4 +317,69 @@ describe('duel camera clearance', () => {
       }
     },
   );
+});
+
+/**
+ * The unhorsing, specifically. Every other victim collapses where it stands;
+ * the berserkr is the only one thrown clear of something, and "thrown clear"
+ * used to mean left hanging in the air above the square, because the reading
+ * eased him downwards to a height that was never the board.
+ */
+describe('the unhorsed berserkr', () => {
+  const sample = (): { hips: number[]; lowest: number[] } => {
+    const victim = buildCharacter('berserkr', 'ash');
+    const rec: Recording = { cues: [], shakes: [] };
+    const ctx = makeCtx(victim, victim, 'p', 'n', rec);
+    const s = stageDuel(ctx);
+    const hips: number[] = [];
+    const lowest: number[] = [];
+    const v = new THREE.Vector3();
+    const rider = victim.bones.hips!;
+    for (let i = 0; i <= 60; i++) {
+      victim.setPose('idle');
+      defeatVictim(ctx, i / 60, s, s.vx, s.y, s.vz);
+      victim.root.updateMatrixWorld(true);
+      hips.push(rider.getWorldPosition(v).y);
+      let lo = Infinity;
+      // The rider only: the horse survives and bolts offstage, which is its job.
+      rider.traverse((o) => {
+        if (!(o instanceof THREE.Mesh)) return;
+        const pos = o.geometry.attributes.position;
+        for (let j = 0; j < pos.count; j++) {
+          const y = v.fromBufferAttribute(pos, j).applyMatrix4(o.matrixWorld).y;
+          if (y < lo) lo = y;
+        }
+      });
+      lowest.push(lo);
+    }
+    victim.dispose();
+    return { hips, lowest };
+  };
+
+  it('leaves the saddle, rises, and comes down onto the board', () => {
+    const { hips } = sample();
+    const seated = hips[0];
+    const apex = Math.max(...hips);
+    // Sampled at 1/60: index 54 is k = 0.9, well after the landing at 0.56 and
+    // before the t=1 restore puts him back in the saddle for the next piece.
+    const grounded = hips[54];
+    expect(apex).toBeGreaterThan(seated + 0.1);
+    expect(grounded).toBeLessThan(seated * 0.45);
+    expect(grounded).toBeGreaterThan(0.1);
+  });
+
+  it('accelerates into the board instead of easing onto it', () => {
+    const { hips } = sample();
+    // Falling from the apex (k≈0.32, index 19) to the landing (k=0.56, i=34).
+    const early = hips[22] - hips[24];
+    const late = hips[32] - hips[34];
+    expect(late).toBeGreaterThan(early * 1.5);
+  });
+
+  it('never passes through the board on the way down or after', () => {
+    const { lowest } = sample();
+    for (let i = 1; i < lowest.length - 1; i++) {
+      expect(lowest[i]).toBeGreaterThan(-0.005);
+    }
+  });
 });

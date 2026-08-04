@@ -26,6 +26,7 @@ import {
   camera,
   cueAt,
   DUR,
+  mountLegs,
   nudge,
   placeAt,
   resolve,
@@ -286,6 +287,7 @@ const KXN_A: DuelScript = {
       const run = easeInCubic(phase(t, 0.1, 0.5));
       victimGuard(ctx, s, lerp(-2.1, 0.4, run));
       const gallop = Math.sin(t * 45);
+      mountLegs(ctx.victim, t * 45, 0.5);
       nudge(ctx.victim, 'mount', 0.07 * gallop);
       nudge(ctx.victim, 'mountHead', 0.12 * gallop);
       const cut = bump(phase(t, 0.36, 0.5));
@@ -337,6 +339,7 @@ const KXN_B: DuelScript = {
       const run = easeInCubic(phase(t, 0.12, 0.48));
       victimGuard(ctx, s, lerp(-2.2, 0.55, run));
       const gallop = Math.sin(t * 46);
+      mountLegs(ctx.victim, t * 46, 0.5);
       nudge(ctx.victim, 'mount', 0.07 * gallop);
       nudge(ctx.victim, 'mountHead', 0.12 * gallop);
       // Pulls up hard into the planted point and comes apart over it.
