@@ -2,11 +2,11 @@
  * Valkyrie (queen): tallest, slender silhouette. Feathered wings on
  * wingL/wingR, spear and small shield, winged helm.
  *
- * Each wing is a fan of cut feathers plus a row of coverts over the roots,
- * rather than three long slabs. `FAN` scales the whole fan: the wingtips are
- * the widest thing on the model, and her height/width ratio has to stay clear
- * of the huscarl's by 8% in scripts/smoke-chars.ts, so the span is tuned, not
- * guessed.
+ * Each wing is a swept spar carrying a graded vane of overlapping feathers —
+ * see the note above the wing loop for why that shape and not a radial fan.
+ * `FAN` scales the whole wing off the shoulder: her height/width ratio has to
+ * stay clear of the huscarl's by 8% in scripts/smoke-chars.ts, and the wings
+ * are what set both numbers, so the span is tuned, not guessed.
  */
 
 import { BoxGeometry, CylinderGeometry } from 'three';
@@ -121,56 +121,96 @@ export function buildValkyrie(faction: Faction): CharacterRig {
     );
   }
 
-  // Wings: a fan of primaries with a row of coverts over the roots.
+  // Wings. A wing reads as a wing because of one thing: a solid leading edge
+  // with a graded vane trailing off it, every feather lying the same way and
+  // overlapping its neighbour. The fan this replaced rooted every quill at one
+  // point and splayed them radially, which is the anatomy of a laurel wreath —
+  // hence "they don't even look like wings".
+  //
+  // So: a spar sweeps out and back from the shoulder, and the feathers stand up
+  // off it in near-parallel, lengthening toward the wrist and shortening again
+  // at the tip. The span is spent upward rather than outward because
+  // scripts/smoke-chars.ts pins her h/w ratio 8% clear of the huscarl's — going
+  // wider costs the ratio, going taller buys it back.
   for (const s of [1, -1] as const) {
     const wing = kit.bone(s === 1 ? 'wingL' : 'wingR', b.chest, [
-      s * 0.085,
-      0.115,
-      0.09,
+      s * 0.102,
+      0.082,
+      0.072,
     ]);
-    // Feathers wide enough to overlap into a vane. Narrow quills on a wide
-    // fan read as a crown of blades, not a wing.
+    // Spar: shoulder to elbow to wrist, out and back with a slight rise. This
+    // is the leading edge, and the only structural line in the wing.
+    kit.mesh(new CylinderGeometry(0.015, 0.0105, 0.115, 7), m.mail, wing, [
+      s * 0.048, 0.032, 0.014,
+    ], [0, 0, s * -1.18]);
+    kit.mesh(new CylinderGeometry(0.0105, 0.007, 0.105, 7), m.mail, wing, [
+      s * 0.135, 0.07, 0.05,
+    ], [-0.38, 0, s * -1.22]);
+
+    // Primaries: rooted along the spar, standing up and raked back. Spacing is
+    // under half a feather's width, so the vane closes into a surface.
     const primaries = [
-      { a: 0.5, len: 0.225, w: 0.115 },
-      { a: 0.72, len: 0.245, w: 0.11 },
-      { a: 0.95, len: 0.235, w: 0.105 },
-      { a: 1.18, len: 0.2, w: 0.095 },
-      { a: 1.4, len: 0.16, w: 0.085 },
+      { at: 0.06, len: 0.15, w: 0.085 },
+      { at: 0.30, len: 0.2, w: 0.092 },
+      { at: 0.52, len: 0.235, w: 0.096 },
+      { at: 0.72, len: 0.245, w: 0.094 },
+      { at: 0.88, len: 0.215, w: 0.086 },
+      { at: 1.0, len: 0.17, w: 0.076 },
     ];
     for (const [i, f] of primaries.entries()) {
-      const reach = (f.len / 2 + 0.035) * FAN;
+      // Root walks the spar; `FAN` scales the whole wing off the shoulder.
+      const rx = (0.03 + 0.125 * f.at) * FAN;
+      const ry = (0.02 + 0.075 * f.at) * FAN;
+      const rz = (0.006 + 0.07 * f.at) * FAN;
+      // Rake: the outer feathers lie back further, which curves the trailing
+      // edge instead of leaving it a straight cut.
+      const rake = 0.2 + 0.26 * f.at;
+      const lift = 0.92 - 0.1 * f.at;
       kit.mesh(
-        extrude(featherShape(f.len, f.w), 0.009),
+        extrude(featherShape(f.len, f.w), 0.008),
         m.bone,
         wing,
-        [s * Math.cos(f.a) * reach, Math.sin(f.a) * reach, 0.008 + i * 0.009],
-        [0.1, s * 0.26, s * (f.a - Math.PI / 2)],
+        [
+          rx + s * (f.len / 2) * 0.12,
+          ry + (f.len / 2) * lift,
+          rz + (f.len / 2) * 0.22,
+        ],
+        [rake, s * 0.52, s * (0.16 + 0.1 * f.at)],
       );
+      // Secondary tucked behind each primary root, filling the inner vane.
+      if (i < 4) {
+        kit.mesh(
+          extrude(featherShape(f.len * 0.62, f.w * 0.9), 0.007),
+          m.cloth,
+          wing,
+          [
+            rx + s * 0.012,
+            ry + f.len * 0.28,
+            rz + 0.024 + f.len * 0.1,
+          ],
+          [rake + 0.18, s * 0.52, s * (0.22 + 0.1 * f.at)],
+        );
+      }
     }
-    // Leading edge: the wing's own bone, root out to the last quill.
-    kit.mesh(
-      new CylinderGeometry(0.014, 0.008, 0.19, 7),
-      m.mail,
-      wing,
-      [s * 0.05, 0.08, -0.014],
-      [0, 0, s * -0.7],
-    );
-    // Coverts: short overlapping feathers hiding where the primaries meet.
-    for (const [i, a] of [0.62, 0.86, 1.1].entries()) {
+
+    // Coverts: a short overlapping row hiding every quill root, plus the
+    // shoulder boss the whole wing appears to grow out of.
+    for (let i = 0; i < 4; i++) {
+      const u = i / 3;
       kit.mesh(
-        extrude(featherShape(0.105, 0.075), 0.008),
+        extrude(featherShape(0.085, 0.062), 0.007),
         m.cloth,
         wing,
-        [s * Math.cos(a) * 0.062, Math.sin(a) * 0.062, -0.014 - i * 0.007],
-        [0.08, s * 0.22, s * (a - Math.PI / 2)],
+        [(0.026 + 0.1 * u) * FAN, (0.014 + 0.062 * u) * FAN - 0.008, (0.004 + 0.058 * u) * FAN - 0.016],
+        [0.2 + 0.18 * u, s * 0.54, s * (0.2 + 0.12 * u)],
       );
     }
     kit.mesh(
       lathe(
         [
-          [0.018, 0.03],
-          [0.032, 0.0],
-          [0.03, -0.03],
+          [0.018, 0.034],
+          [0.036, 0.0],
+          [0.032, -0.034],
         ],
         8,
       ),
