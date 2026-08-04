@@ -82,6 +82,22 @@ const easeInOut = (t: number): number => {
 const factionOf = (color: ColoredPiece['color']): Faction =>
   color === 'w' ? 'ash' : 'ember';
 
+const UP = new THREE.Vector3(0, 1, 0);
+
+/**
+ * Which way a side stands. A rig's neutral gaze is -Z and white starts on the
+ * +z rank, so ash already looks up the board and ember has to be turned to look
+ * back at it — otherwise both armies face the same way and nobody is looking at
+ * anyone.
+ *
+ * This lives on the square's anchor rather than on the rig root because
+ * ./locomotion.ts owns root yaw absolutely: it writes `rotation.y` to face the
+ * direction of travel and `endTravel` returns it to zero. Zero therefore has to
+ * mean "facing my side's forward", which is exactly what a rotated parent buys.
+ */
+const facingYaw = (color: ColoredPiece['color']): number =>
+  color === 'w' ? 0 : Math.PI;
+
 // ── Procedural textures (browser-only; called from the constructor) ─────────
 
 function canvas2d(size: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
@@ -700,10 +716,16 @@ export class Stage {
         const [, entry] = stale.splice(bestIdx, 1)[0];
         const from = entry.anchor.position.clone();
         entry.anchor.position.set(wx, wy, wz);
+        entry.anchor.rotation.y = facingYaw(want.color);
         if (!this.reducedMotion) {
           // The anchor is already on the destination square; the rig walks the
-          // offset off over the course of the journey.
-          entry.rig.root.position.copy(from.sub(entry.anchor.position));
+          // offset off over the course of the journey. Into anchor space, so
+          // that both the offset and the heading below are expressed in the
+          // frame the rig's root actually lives in — the anchor carries the
+          // side's facing, and ember's is a half turn.
+          entry.rig.root.position
+            .copy(from.sub(entry.anchor.position))
+            .applyAxisAngle(UP, -entry.anchor.rotation.y);
           const offset = entry.rig.root.position;
           const gait = gaitFor(PIECE_CHARACTER[want.type], flat);
           const distance = Math.hypot(offset.x, offset.z);
@@ -723,6 +745,7 @@ export class Stage {
       } else {
         const anchor = new THREE.Group();
         anchor.position.set(wx, wy, wz);
+        anchor.rotation.y = facingYaw(want.color);
         const rig = builder(PIECE_CHARACTER[want.type], factionOf(want.color), { flat });
         this.attachRig(anchor, rig);
         this.pieceLayer.add(anchor);
