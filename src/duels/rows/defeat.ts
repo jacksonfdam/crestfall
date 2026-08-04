@@ -25,6 +25,7 @@
  */
 
 import type { CharacterRig, DuelContext } from '../../core/stage.ts';
+import { groundDust } from '../dust.ts';
 import { crumbleJotunn } from '../jotunn.ts';
 import { clamp01, easeInCubic, easeOutCubic, lerp, phase } from '../motion.ts';
 import {
@@ -646,6 +647,10 @@ export function defeatVictim(
 ): void {
   const kk = clamp01(k);
   const v = ctx.victim;
+  // Dust on the square the victim goes down on, for every reading — a piece
+  // dissolves into the board rather than being switched off. Anchored to the
+  // ground, so it stays put while the reading drops or sinks the body.
+  groundDust(v, kk, s.vx, s.y, s.vz);
   switch (ctx.victimPiece) {
     case 'p':
       defeatHuscarl(ctx, v, kk, s, fx, fy, fz);
