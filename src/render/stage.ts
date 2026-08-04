@@ -17,6 +17,7 @@ import { PIECE_CHARACTER } from '../core/contract.ts';
 import type { CharacterRig, CharacterOptions, DuelCameraRig } from '../core/stage.ts';
 import { mulberry32 } from '../core/prng.ts';
 import { squareToWorld, worldToSquare } from './boardMath.ts';
+import { arcCamera } from './cameraPath.ts';
 import { endTravel, gaitFor, stepTravel, travelSeconds, type Gait } from './locomotion.ts';
 
 export type ViewMode = '3d' | '2d';
@@ -833,14 +834,17 @@ export class Stage {
         }
         const k = this.reducedMotion ? 1 : easeInOut(t);
         // moveTo runs every frame of a duel — keep it allocation-free.
-        this.duelDesiredPos.lerpVectors(
-          this.duelStartPos,
-          this.scratchVec3.set(pos[0], pos[1], pos[2]),
-          k,
-        );
         this.duelDesiredLook.lerpVectors(
           this.duelStartLook,
           this.scratchVec3.set(lookAt[0], lookAt[1], lookAt[2]),
+          k,
+        );
+        // Arc around the framing centre; a chord would cut through a fighter.
+        arcCamera(
+          this.duelDesiredPos,
+          this.duelStartPos,
+          this.scratchVec3.set(pos[0], pos[1], pos[2]),
+          this.duelDesiredLook,
           k,
         );
       },
@@ -918,8 +922,9 @@ export class Stage {
       this.returnT += dt / CAMERA_RETURN_SECONDS;
       const k = easeInOut(this.returnT);
       const target = this.orbitPosition(this.scratchVec3);
-      this.perspCamera.position.lerpVectors(this.returnFromPos, target, k);
       const look = this.scratchVec3b.lerpVectors(this.returnFromLook, this.orbitTarget, k);
+      // Same arc on the way out: the victor is still standing on the square.
+      arcCamera(this.perspCamera.position, this.returnFromPos, target, look, k);
       this.perspCamera.lookAt(look);
       if (this.returnT >= 1) this.returning = false;
     } else {
