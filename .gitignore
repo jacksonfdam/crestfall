@@ -15,3 +15,9 @@ public/config.json
 # Supabase CLI scratch state
 supabase/.branches
 supabase/.temp
+
+# Blender review renders. Everything under here is regenerated from src/chars
+# by scripts/blender/export-chars.ts + build_chars.py, so the scripts are the
+# source of truth and these are throwaway output — 31 MB of it, across a
+# directory per iteration. Commit a render only if a doc actually links it.
+assets/blender/

@@ -1,14 +1,31 @@
 /**
- * Valkyrie (queen): tallest, slender silhouette. Layered feather wings on
+ * Valkyrie (queen): tallest, slender silhouette. Feathered wings on
  * wingL/wingR, spear and small shield, winged helm.
+ *
+ * Each wing is a fan of cut feathers plus a row of coverts over the roots,
+ * rather than three long slabs. `FAN` scales the whole fan: the wingtips are
+ * the widest thing on the model, and her height/width ratio has to stay clear
+ * of the huscarl's by 8% in scripts/smoke-chars.ts, so the span is tuned, not
+ * guessed.
  */
 
-import { BoxGeometry, ConeGeometry, CylinderGeometry, SphereGeometry } from 'three';
+import { BoxGeometry, CylinderGeometry } from 'three';
 import type { Faction } from '../core/contract.ts';
 import type { CharacterRig } from '../core/stage.ts';
+import {
+  bladeHead,
+  extrude,
+  featherShape,
+  lamellarSkirt,
+  lathe,
+  roundShield,
+} from './detail.ts';
 import { buildHumanoid } from './humanoid.ts';
 import { factionMaterials } from './materials.ts';
 import { RigKit } from './rig.ts';
+
+/** Wingtip reach multiplier — see the ratio note above before touching. */
+const FAN = 0.68;
 
 export function buildValkyrie(faction: Faction): CharacterRig {
   const kit = new RigKit();
@@ -30,57 +47,171 @@ export function buildValkyrie(faction: Faction): CharacterRig {
     torsoMat: m.steel,
     limbMat: m.cloth,
     headMat: m.bone,
+    jointMat: m.mail,
+    beltMat: m.gold,
+    waist: 0.2,
   });
 
-  // Skirt of hanging lamellar plates.
-  kit.mesh(new CylinderGeometry(0.1, 0.14, 0.2, 9), m.cloth, b.hips, [
-    0, -0.08, 0,
-  ]);
+  // Scale cuirass over the ribs, then a skirt of hanging lamellar plates.
+  kit.mesh(
+    lathe(
+      [
+        [0.088, 0.16],
+        [0.096, 0.09],
+        [0.093, 0.0],
+        [0.084, -0.06],
+        [0.078, -0.08],
+      ],
+      12,
+    ),
+    m.steel,
+    b.spine,
+    [0, 0.09, 0],
+  );
+  kit.mesh(
+    lathe(
+      [
+        [0.1, 0.02],
+        [0.118, -0.06],
+        [0.132, -0.1],
+        [0.126, -0.105],
+        [0, -0.1],
+      ],
+      10,
+    ),
+    m.cloth,
+    b.hips,
+    [0, -0.02, 0],
+  );
+  lamellarSkirt(kit, m.steel, b.hips, {
+    count: 12,
+    radius: 0.124,
+    y: -0.05,
+    len: 0.115,
+    width: 0.05,
+    flare: 0.16,
+  });
 
-  // Winged helm.
-  kit.mesh(new SphereGeometry(0.06, 8, 5), m.steel, b.head, [0, 0.075, 0]);
+  // Winged helm: revolved cap, cheek plates, swept crest wings.
+  kit.mesh(
+    lathe(
+      [
+        [0, 0.135],
+        [0.024, 0.126],
+        [0.048, 0.098],
+        [0.06, 0.056],
+        [0.062, 0.03],
+        [0.052, 0.024],
+      ],
+      10,
+    ),
+    m.steel,
+    b.head,
+  );
   for (const s of [1, -1] as const) {
-    kit.mesh(new BoxGeometry(0.015, 0.1, 0.07), m.bone, b.head, [
-      s * 0.06, 0.13, 0.01,
-    ], [0.25, 0, s * 0.35]);
+    kit.mesh(new BoxGeometry(0.014, 0.052, 0.034), m.steel, b.head, [
+      s * 0.052, 0.052, -0.016,
+    ]);
+    kit.mesh(
+      extrude(featherShape(0.082, 0.046), 0.007),
+      m.bone,
+      b.head,
+      [s * 0.066, 0.112, 0.03],
+      [0.5, 0, s * 0.95],
+    );
   }
 
-  // Feather-layered wings; wing bones flare them in guard/victory.
+  // Wings: a fan of primaries with a row of coverts over the roots.
   for (const s of [1, -1] as const) {
     const wing = kit.bone(s === 1 ? 'wingL' : 'wingR', b.chest, [
-      s * 0.05, 0.12, 0.06,
+      s * 0.085,
+      0.115,
+      0.09,
     ]);
-    const layers = [
-      { len: 0.29, w: 0.08, tilt: 0.78, z: 0 },
-      { len: 0.26, w: 0.07, tilt: 1.1, z: 0.02 },
-      { len: 0.21, w: 0.06, tilt: 1.4, z: 0.04 },
+    // Feathers wide enough to overlap into a vane. Narrow quills on a wide
+    // fan read as a crown of blades, not a wing.
+    const primaries = [
+      { a: 0.5, len: 0.225, w: 0.115 },
+      { a: 0.72, len: 0.245, w: 0.11 },
+      { a: 0.95, len: 0.235, w: 0.105 },
+      { a: 1.18, len: 0.2, w: 0.095 },
+      { a: 1.4, len: 0.16, w: 0.085 },
     ];
-    for (const f of layers) {
-      const a = f.tilt;
-      kit.mesh(new BoxGeometry(f.len, f.w, 0.014), m.bone, wing, [
-        s * Math.cos(a) * (f.len / 2 + 0.02),
-        Math.sin(a) * (f.len / 2 + 0.02),
-        f.z,
-      ], [0.15, s * 0.35, s * a]);
+    for (const [i, f] of primaries.entries()) {
+      const reach = (f.len / 2 + 0.035) * FAN;
+      kit.mesh(
+        extrude(featherShape(f.len, f.w), 0.009),
+        m.bone,
+        wing,
+        [s * Math.cos(f.a) * reach, Math.sin(f.a) * reach, 0.008 + i * 0.009],
+        [0.1, s * 0.26, s * (f.a - Math.PI / 2)],
+      );
     }
+    // Leading edge: the wing's own bone, root out to the last quill.
+    kit.mesh(
+      new CylinderGeometry(0.014, 0.008, 0.19, 7),
+      m.mail,
+      wing,
+      [s * 0.05, 0.08, -0.014],
+      [0, 0, s * -0.7],
+    );
+    // Coverts: short overlapping feathers hiding where the primaries meet.
+    for (const [i, a] of [0.62, 0.86, 1.1].entries()) {
+      kit.mesh(
+        extrude(featherShape(0.105, 0.075), 0.008),
+        m.cloth,
+        wing,
+        [s * Math.cos(a) * 0.062, Math.sin(a) * 0.062, -0.014 - i * 0.007],
+        [0.08, s * 0.22, s * (a - Math.PI / 2)],
+      );
+    }
+    kit.mesh(
+      lathe(
+        [
+          [0.018, 0.03],
+          [0.032, 0.0],
+          [0.03, -0.03],
+        ],
+        8,
+      ),
+      m.bone,
+      wing,
+    );
   }
 
+  // Spear: banded shaft, winged lugs under a long leaf blade.
   const weapon = kit.bone('weapon', b.handR);
-  kit.mesh(new CylinderGeometry(0.013, 0.015, 1.1, 6), m.wood, weapon, [
+  kit.mesh(new CylinderGeometry(0.0125, 0.0145, 1.1, 8), m.wood, weapon, [
     0, -0.05, 0,
   ]);
-  kit.mesh(new ConeGeometry(0.028, 0.12, 6), m.steel, weapon, [0, 0.56, 0]);
-  for (const s of [1, -1] as const) {
-    kit.mesh(new BoxGeometry(0.05, 0.035, 0.012), m.steel, weapon, [
-      s * 0.035, 0.485, 0,
-    ], [0, 0, s * 0.5]);
+  for (const y of [-0.1, -0.02, 0.06] as const) {
+    kit.mesh(new CylinderGeometry(0.0165, 0.0165, 0.012, 8), m.gold, weapon, [
+      0,
+      y,
+      0,
+    ]);
   }
+  bladeHead(kit, m, weapon, {
+    y: 0.5,
+    len: 0.12,
+    width: 0.056,
+    thickness: 0.009,
+    collar: 0.034,
+    lugs: 2,
+  });
+  kit.mesh(new CylinderGeometry(0.014, 0.008, 0.05, 8), m.steel, weapon, [
+    0, -0.615, 0,
+  ]);
 
-  const shield = kit.bone('shield', b.forearmL, [0, -0.06, -0.05]);
-  kit.mesh(new CylinderGeometry(0.11, 0.11, 0.016, 12), m.wood, shield, [
-    0, 0, 0,
-  ], [Math.PI / 2, 0, 0]);
-  kit.mesh(new SphereGeometry(0.028, 8, 5), m.steel, shield, [0, 0, -0.014]);
+  // Small round shield, centre-gripped in the left fist (see huscarl.ts): on
+  // the hand it clears the lamellar, on the forearm it did not.
+  const shield = kit.bone('shield', b.handL, [0, -0.025, -0.015]);
+  roundShield(kit, m, shield, {
+    r: 0.11,
+    studs: 8,
+    segments: 12,
+    rot: [-Math.PI / 2, 0, 0],
+  });
 
   return kit.build('valkyrie', faction, 1.5, {
     idle: {
@@ -88,12 +219,14 @@ export function buildValkyrie(faction: Faction): CharacterRig {
       forearmR: [0.25, 0, 0],
       armL: [0.25, 0, 0.12],
       forearmL: [0.4, 0, 0],
+      shield: [-0.65, 0, 0],
     },
     guard: {
       armR: [1.1, 0, -0.2],
       forearmR: [0.45, 0, 0],
       armL: [0.8, 0, 0.15],
       forearmL: [0.5, 0, 0],
+      shield: [-1.3, 0, 0],
       wingL: [0, 0, 0.35],
       wingR: [0, 0, -0.35],
       spine: [0.1, 0, 0],
@@ -102,6 +235,7 @@ export function buildValkyrie(faction: Faction): CharacterRig {
       armR: [2.85, 0, -0.15],
       forearmR: [0.1, 0, 0],
       armL: [0.5, 0, 0.6],
+      shield: [-0.98, 0, 0],
       wingL: [0, -0.2, 0.6],
       wingR: [0, 0.2, -0.6],
       head: [-0.2, 0, 0],

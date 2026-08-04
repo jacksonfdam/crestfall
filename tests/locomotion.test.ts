@@ -52,13 +52,28 @@ function idleSnapshot(piece: PieceType): number[] {
 
 describe('gait assignment', () => {
   it('gives every character a gait its anatomy can perform', () => {
-    // The völva has no leg bones and the jötunn is a folded tower: neither may
-    // be assigned a stepping gait.
-    const volva = buildCharacter('volva', 'ash');
-    expect(volva.bones.legL).toBeUndefined();
-    expect(gaitFor('volva', false)).toBe('drift');
+    // Each gait drives a named set of bones, so no character may be handed one
+    // it has nothing to perform it with.
+
+    // The jötunn is a folded tower: it is tipped over its shell, never stepped.
     expect(gaitFor('jotunn', false)).toBe('grind');
+    expect(buildCharacter('jotunn', 'ash').bones.towerShell).toBeDefined();
+
+    // The berserkr rides, and it is the horse's own four legs that gallop.
     expect(gaitFor('berserkr', false)).toBe('ride');
+    const horse = buildCharacter('berserkr', 'ash');
+    for (const side of ['FL', 'FR', 'BL', 'BR'] as const) {
+      expect(horse.bones[`mountLeg${side}`]).toBeDefined();
+      expect(horse.bones[`mountShin${side}`]).toBeDefined();
+    }
+
+    // The völva drifts: she does step, but only under a floor-length robe that
+    // hangs off its own hem bone — the stride itself is never seen.
+    expect(gaitFor('volva', false)).toBe('drift');
+    const volva = buildCharacter('volva', 'ash');
+    expect(volva.bones.legL).toBeDefined();
+    expect(volva.bones.hem).toBeDefined();
+
     for (const name of ['huscarl', 'valkyrie', 'jarl'] as const) {
       expect(gaitFor(name, false)).toBe('walk');
       expect(buildCharacter(name, 'ash').bones.legL).toBeDefined();

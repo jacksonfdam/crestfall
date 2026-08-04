@@ -24,6 +24,7 @@ import {
   camera,
   cueAt,
   DUR,
+  mountLegs,
   nudge,
   placeAt,
   resolve,
@@ -244,6 +245,7 @@ const BXN_A: DuelScript = {
       const run = easeOutCubic(phase(t, 0.14, 0.5));
       victimGuard(ctx, s, lerp(-1.6, 0.1, run));
       const gallop = Math.sin(t * 44);
+      mountLegs(ctx.victim, t * 44, 0.5);
       nudge(ctx.victim, 'mount', 0.07 * gallop);
       nudge(ctx.victim, 'mountHead', 0.12 * gallop);
       // Rune one: the horse shies. Rune two: it rears in earnest.
@@ -305,6 +307,7 @@ const BXN_B: DuelScript = {
       const run = easeInCubic(phase(t, 0.1, 0.46));
       victimGuard(ctx, s, lerp(-1.9, 0.35, run));
       const gallop = Math.sin(t * 46);
+      mountLegs(ctx.victim, t * 46, 0.5);
       nudge(ctx.victim, 'mount', 0.07 * gallop);
       nudge(ctx.victim, 'mountHead', 0.12 * gallop);
       // Into the fetter at full speed: the forehand stops, the rest does not.

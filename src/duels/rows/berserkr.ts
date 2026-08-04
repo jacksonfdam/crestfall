@@ -25,6 +25,7 @@ import {
   camera,
   cueAt,
   DUR,
+  mountLegs,
   nudge,
   placeAt,
   resolve,
@@ -187,6 +188,7 @@ const NXP_A: DuelScript = {
     if (cut > 0) blendPose(a, SCISSOR_UP, SCISSOR_IN, cut);
     // Gallop through the whole approach; the horse leans into its own veer.
     const gallop = Math.sin(t * 40) * (1 - cut * 0.6);
+    mountLegs(a, t * 40, 0.5 * (1 - cut * 0.6));
     nudge(a, 'mount', 0.07 * gallop, 0, -0.25 * veer);
     nudge(a, 'mountHead', 0.13 * gallop, -0.45 * veer, 0);
 
@@ -240,6 +242,7 @@ const NXP_B: DuelScript = {
     const turn = easeInOutCubic(phase(t, 0.36, 0.62));
     const pass2 = easeInCubic(phase(t, 0.6, 0.78));
     const gallop = Math.sin(t * 42);
+    mountLegs(a, t * 42, 0.5);
     nudge(a, 'mount', 0.07 * gallop, 0, 0.3 * turn - 0.3 * pass2);
     nudge(a, 'mountHead', 0.12 * gallop, 0.7 * turn, 0);
     // One axe kept high through the turn, then brought back across.
@@ -296,6 +299,7 @@ const NXN_A: DuelScript = {
         s.vy - 0.5 * p1 + 0.9 * p2,
       );
       const gallop = Math.sin(t * 41 + 1.3);
+      mountLegs(ctx.victim, t * 41 + 1.3, 0.5);
       nudge(ctx.victim, 'mount', 0.07 * gallop);
       nudge(ctx.victim, 'mountHead', 0.12 * gallop);
       const trade = bump(phase(t, 0.2, 0.32));
@@ -315,6 +319,7 @@ const NXN_A: DuelScript = {
     const take = easeOutCubic(phase(t, 0.64, 0.78));
     if (take > 0) blendPose(a, UNDER, REACH, take);
     const gallop = Math.sin(t * 43);
+    mountLegs(a, t * 43, 0.5);
     nudge(a, 'mount', 0.07 * gallop);
     nudge(a, 'mountHead', 0.12 * gallop);
 
@@ -488,6 +493,7 @@ const NXB_B: DuelScript = {
     const cut = easeInCubic(phase(t, 0.52, 0.66));
     if (cut > 0) blendPose(a, REACH, SCISSOR_IN, cut);
     const gallop = Math.sin(t * 44);
+    mountLegs(a, t * 44, 0.5);
     nudge(a, 'mount', 0.07 * gallop);
     nudge(a, 'mountHead', 0.12 * gallop);
 
@@ -539,6 +545,7 @@ const NXR_A: DuelScript = {
     const chop = easeInCubic(phase(t, 0.6, 0.72));
     if (chop > 0) blendPose(a, UNDER, CHOP_LOW, chop);
     const gallop = Math.sin(t * 42) * (1 - slide * 0.5);
+    mountLegs(a, t * 42, 0.5 * (1 - slide * 0.5));
     nudge(a, 'mount', 0.07 * gallop - 0.35 * slide, 0, 0.2 * slide);
     nudge(a, 'mountHead', 0.12 * gallop - 0.3 * slide, 0, 0);
 
@@ -694,6 +701,7 @@ const NXQ_B: DuelScript = {
     const down = easeInCubic(phase(t, 0.56, 0.7));
     if (down > 0) blendPose(a, SCISSOR_UP, FALLING_AXES, down * 0.8);
     const gallop = Math.sin(t * 43) * (1 - shoulder * 0.6);
+    mountLegs(a, t * 43, 0.5 * (1 - shoulder * 0.6));
     nudge(a, 'mount', 0.07 * gallop + 0.25 * shoulder, 0, -0.2 * shoulder);
     nudge(a, 'mountHead', 0.12 * gallop - 0.25 * shoulder, 0, 0);
 

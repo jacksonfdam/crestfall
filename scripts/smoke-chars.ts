@@ -27,8 +27,12 @@ const FACTIONS: Faction[] = ['ash', 'ember'];
 const MANDATORY: BoneName[] = ['root', 'hips', 'spine', 'head'];
 const EXPECTED_EXTRA: Partial<Record<CharacterName, BoneName[]>> = {
   huscarl: ['armL', 'armR', 'legL', 'legR', 'weapon', 'shield'],
-  berserkr: ['mount', 'mountHead', 'armL', 'armR', 'legL', 'legR', 'weapon'],
-  volva: ['staff', 'cloak', 'armL', 'armR'],
+  berserkr: [
+    'mount', 'mountHead', 'armL', 'armR', 'legL', 'legR', 'weapon',
+    'mountLegFL', 'mountLegFR', 'mountLegBL', 'mountLegBR',
+    'mountShinFL', 'mountShinFR', 'mountShinBL', 'mountShinBR',
+  ],
+  volva: ['staff', 'cloak', 'hem', 'armL', 'armR', 'legL', 'legR'],
   jotunn: ['towerShell', 'armL', 'armR', 'legL', 'legR', 'shinL', 'shinR'],
   valkyrie: ['wingL', 'wingR', 'weapon', 'shield', 'legL', 'legR'],
   jarl: ['weapon', 'cloak', 'legL', 'legR'],

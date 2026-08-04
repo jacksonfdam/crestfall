@@ -18,6 +18,7 @@
  * follow the survivor onto the board.
  */
 
+import { Euler, Quaternion, Vector3 } from 'three';
 import type { Object3D } from 'three';
 import type { BoneName, CharacterRig, DuelContext } from '../../core/stage.ts';
 import {
@@ -282,9 +283,17 @@ export function restoreHips(rig: CharacterRig): void {
  * the duel faces.
  *
  * The rider's hips hang off the mount bone, so getting him off the horse means
- * cancelling the mount's transform: this reads the mount's yaw and translation
- * (which the caller must have written earlier in the same frame) and inverts
- * them. The mount's pitch is deliberately left in — it is what launches him.
+ * cancelling the mount's transform: this reads the mount's rotation and
+ * translation (which the caller must have written earlier in the same frame)
+ * and inverts them.
+ *
+ * `level` is how much of the mount's PITCH AND ROLL to cancel as well as its
+ * yaw. At 0 they are left in and the rider is carried by them — which is what a
+ * leap out of the saddle wants, since the horse's own tumble is what launches
+ * him. At 1 the offset lands exactly where it was asked for in the rig's own
+ * frame, which is what a fall needs: a man coming off a rearing, bolting horse
+ * has to reach the board at the height the script says, not wherever the roll
+ * of the horse happens to leave him.
  *
  * A rider offset is a bone position, so it must be back to (0,0,0) before the
  * resolve, or the victor rides onto the board dismounted.
@@ -294,18 +303,65 @@ export function seatRider(
   ox: number,
   oy: number,
   oz: number,
+  level = 0,
 ): void {
   const r = restOf(rig);
   const mount = r.mount;
   const hips = r.hips;
   if (!mount || !hips) return;
-  const dx = r.mountP[0] + r.mountHipsP[0] + ox - mount.position.x;
-  const dy = r.mountP[1] + r.mountHipsP[1] + oy - mount.position.y;
-  const dz = r.mountP[2] + r.mountHipsP[2] + oz - mount.position.z;
-  const c = Math.cos(-mount.rotation.y);
-  const sn = Math.sin(-mount.rotation.y);
-  hips.position.set(dx * c + dz * sn, dy, -dx * sn + dz * c);
+  _seat.set(
+    r.mountP[0] + r.mountHipsP[0] + ox - mount.position.x,
+    r.mountP[1] + r.mountHipsP[1] + oy - mount.position.y,
+    r.mountP[2] + r.mountHipsP[2] + oz - mount.position.z,
+  );
+  // At level 0 this reduces to a pure yaw inverse — the original behaviour.
+  _mountE.set(
+    mount.rotation.x * level,
+    mount.rotation.y,
+    mount.rotation.z * level,
+  );
+  _mountQ.setFromEuler(_mountE).invert();
+  hips.position.copy(_seat.applyQuaternion(_mountQ));
 }
+
+/**
+ * Orient a rider in the rig's OWN frame rather than the saddle's.
+ *
+ * His hips hang off the mount bone, so a rider who has left it still inherits
+ * every degree the horse turns: a man lying on the board would otherwise swing
+ * slowly round after the horse as it bolts offstage. `level` blends from
+ * "carried by the saddle" (0, the plain seated behaviour) to "exactly this
+ * attitude in root space, whatever the horse is doing" (1).
+ *
+ * Writes hips.quaternion, which three keeps in sync with hips.rotation — so
+ * restoring the bone by setting its rotation back to zero still works.
+ */
+export function faceRider(
+  rig: CharacterRig,
+  pitch: number,
+  yaw: number,
+  roll: number,
+  level = 1,
+): void {
+  const r = restOf(rig);
+  const mount = r.mount;
+  const hips = r.hips;
+  if (!mount || !hips) return;
+  _bodyQ.setFromEuler(_bodyE.set(pitch, yaw, roll));
+  _mountE.set(
+    mount.rotation.x * level,
+    mount.rotation.y * level,
+    mount.rotation.z * level,
+  );
+  _mountQ.setFromEuler(_mountE).invert();
+  hips.quaternion.copy(_mountQ.multiply(_bodyQ));
+}
+
+const _seat = new Vector3();
+const _mountE = new Euler();
+const _mountQ = new Quaternion();
+const _bodyE = new Euler();
+const _bodyQ = new Quaternion();
 
 /** Restore the mount and rider to their rest transforms. */
 export function restoreMount(rig: CharacterRig): void {
@@ -316,6 +372,73 @@ export function restoreMount(rig: CharacterRig): void {
   }
   if (r.hips) {
     r.hips.position.set(r.mountHipsP[0], r.mountHipsP[1], r.mountHipsP[2]);
+  }
+}
+
+/**
+ * Gallop the horse's own four legs: hind pair driving, front pair reaching half
+ * a beat later, knee or hock folding only through the carry.
+ *
+ * `beat` is in radians — the same phase the caller is already feeding its mount
+ * nudge, so a cell galloping on `Math.sin(t * 40)` passes `t * 40` and the legs
+ * land on the body's own rhythm. `stride` scales to 0 for a halt.
+ *
+ * Unlike nudge() this ASSIGNS: the horse's legs appear in no pose table, so
+ * nothing re-baselines them each frame and adding would accumulate. The canter
+ * is duplicated from src/render/locomotion.ts on purpose — render and duels are
+ * sibling consumers of src/core and neither may reach into the other.
+ */
+export function mountLegs(
+  rig: CharacterRig,
+  beat: number,
+  stride: number,
+): void {
+  const b = rig.bones;
+  const leg = (
+    upper: BoneName,
+    lower: BoneName,
+    offset: number,
+    amp: number,
+    fold: 1 | -1,
+  ): void => {
+    const u = b[upper];
+    const l = b[lower];
+    if (!u || !l) return;
+    const a = beat + offset;
+    u.rotation.x = Math.sin(a) * amp;
+    l.rotation.x = fold * Math.max(0, -Math.cos(a)) * amp * 1.5;
+  };
+  const turn = Math.PI * 2;
+  leg('mountLegBL', 'mountShinBL', 0, stride, 1);
+  leg('mountLegBR', 'mountShinBR', 0.1 * turn, stride, 1);
+  leg('mountLegFL', 'mountShinFL', 0.45 * turn, stride * 0.87, -1);
+  leg('mountLegFR', 'mountShinFR', 0.55 * turn, stride * 0.87, -1);
+}
+
+/**
+ * A rearing horse: the front legs strike out and paw, the hind legs fold under
+ * and take the weight. `k` is 0 (all four down) to 1 (fully up), `paw` a
+ * free-running phase in radians for the pawing itself. Assigns, like mountLegs.
+ */
+export function mountRear(rig: CharacterRig, k: number, paw: number): void {
+  const b = rig.bones;
+  const pairs: [BoneName, BoneName, boolean, number][] = [
+    ['mountLegFL', 'mountShinFL', true, 0],
+    ['mountLegFR', 'mountShinFR', true, 2.2],
+    ['mountLegBL', 'mountShinBL', false, 0],
+    ['mountLegBR', 'mountShinBR', false, 0],
+  ];
+  for (const [upper, lower, isFront, off] of pairs) {
+    const u = b[upper];
+    const l = b[lower];
+    if (!u || !l) continue;
+    if (isFront) {
+      u.rotation.x = (1.0 + 0.35 * Math.sin(paw + off)) * k;
+      l.rotation.x = (-0.9 + 0.4 * Math.sin(paw + off + 1.1)) * k;
+    } else {
+      u.rotation.x = -0.3 * k;
+      l.rotation.x = 0.5 * k;
+    }
   }
 }
 

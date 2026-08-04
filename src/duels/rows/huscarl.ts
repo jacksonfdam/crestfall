@@ -25,6 +25,7 @@ import {
   camera,
   cueAt,
   DUR,
+  mountLegs,
   nudge,
   placeAt,
   resolve,
@@ -304,6 +305,7 @@ const PXN_A: DuelScript = {
       const run = easeInCubic(phase(t, 0.1, 0.5));
       victimGuard(ctx, s, lerp(-2.2, 0, run));
       const gallop = Math.sin(t * 46);
+      mountLegs(ctx.victim, t * 46, 0.5);
       nudge(ctx.victim, 'mount', 0.06 * gallop);
       nudge(ctx.victim, 'mountHead', 0.12 * gallop, 0, 0);
       nudge(ctx.victim, 'armR', 0.4 * smooth(phase(t, 0.3, 0.5)));
@@ -351,6 +353,7 @@ const PXN_B: DuelScript = {
       const run = easeOutCubic(phase(t, 0.1, 0.55));
       victimGuard(ctx, s, lerp(-2.4, 0.5, run), 0, 0, s.vy + 0.5 * run);
       const gallop = Math.sin(t * 44);
+      mountLegs(ctx.victim, t * 44, 0.5);
       nudge(ctx.victim, 'mount', 0.05 * gallop);
       nudge(ctx.victim, 'mountHead', 0.1 * gallop, -0.3 * run, 0);
       // He swings at empty air where the huscarl was standing.

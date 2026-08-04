@@ -35,7 +35,18 @@ export type BoneName =
   | 'wingR'
   | 'mount'      // Berserkr's horse body
   | 'mountHead'
+  // The horse's own four legs: upper bone at shoulder/stifle, lower at
+  // knee/hock. F/B = front/back, L/R = the horse's left/right.
+  | 'mountLegFL'
+  | 'mountLegFR'
+  | 'mountLegBL'
+  | 'mountLegBR'
+  | 'mountShinFL'
+  | 'mountShinFR'
+  | 'mountShinBL'
+  | 'mountShinBR'
   | 'staff'      // Völva
+  | 'hem'        // Völva's robe skirt, so travel can trail it
   | 'towerShell'; // Jötunn petrified form
 
 export type PoseName = 'idle' | 'victory' | 'guard';

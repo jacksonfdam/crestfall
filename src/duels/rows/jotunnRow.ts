@@ -28,6 +28,7 @@ import {
   blendPose,
   camera,
   cueAt,
+  mountLegs,
   nudge,
   place,
   placeAt,
@@ -333,6 +334,7 @@ const RXN_A: DuelScript = {
       const run = easeInCubic(phase(t, 0.14, 0.48));
       victimGuard(ctx, s, lerp(-2.0, 0.3, run));
       const gallop = Math.sin(t * 45);
+      mountLegs(ctx.victim, t * 45, 0.5);
       nudge(ctx.victim, 'mount', 0.07 * gallop);
       nudge(ctx.victim, 'mountHead', 0.12 * gallop);
       const rear = smooth(phase(t, 0.46, 0.58));
@@ -385,6 +387,7 @@ const RXN_B: DuelScript = {
         s.vy - 0.8 * p1 + 1.4 * p2,
       );
       const gallop = Math.sin(t * 44);
+      mountLegs(ctx.victim, t * 44, 0.5);
       nudge(ctx.victim, 'mount', 0.07 * gallop);
       nudge(ctx.victim, 'mountHead', 0.12 * gallop);
       const cut = bump(phase(t, 0.3, 0.44));
