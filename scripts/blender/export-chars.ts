@@ -24,6 +24,12 @@ import {
   CHARACTER_HEIGHTS,
   factionMaterials,
 } from '../../src/chars/index.ts';
+import {
+  endTravel,
+  gaitFor,
+  stepTravel,
+  travelSeconds,
+} from '../../src/render/locomotion.ts';
 
 const NAMES: CharacterName[] = [
   'huscarl',
@@ -206,8 +212,52 @@ function exportCharacter(name: CharacterName) {
     };
   });
 
+  // Travel cycle. The point of exporting this is that the gait in Blender is
+  // the gait the game plays: src/render/locomotion.ts is sampled directly
+  // rather than described, so a wing beat or a hoof fold cannot drift between
+  // the two. Sampled in place — the approach itself is the renderer's business,
+  // so only the pose, the yaw and the bob travel across.
+  const gait = gaitFor(name, false);
+  const travelFrames: Array<{
+    bones: Record<string, [number, number, number]>;
+    root: [number, number, number];
+    bob: number;
+  }> = [];
+  const TRAVEL_SAMPLES = 24;
+  const TRAVEL_SQUARES = 3;
+  for (let i = 0; i <= TRAVEL_SAMPLES; i++) {
+    const k = i / TRAVEL_SAMPLES;
+    // Heading 0: a straight walk toward the far rank, so the cycle reads
+    // without the turn-in confusing it.
+    const bob = stepTravel(rig, gait, k, TRAVEL_SQUARES, 0);
+    const table: Record<string, [number, number, number]> = {};
+    for (const bone of boneNames) {
+      const r = rig.bones[bone]!.rotation;
+      table[bone] = [round(r.x), round(r.y), round(r.z)];
+    }
+    const rr = rig.root.rotation;
+    travelFrames.push({
+      bones: table,
+      root: [round(rr.x), round(rr.y), round(rr.z)],
+      bob: round(bob),
+    });
+  }
+  endTravel(rig);
+  zero();
+
   rig.dispose();
-  return { height: CHARACTER_HEIGHTS[name], bones, poses, parts };
+  return {
+    height: CHARACTER_HEIGHTS[name],
+    bones,
+    poses,
+    parts,
+    travel: {
+      gait,
+      seconds: round(travelSeconds(gait, TRAVEL_SQUARES)),
+      squares: TRAVEL_SQUARES,
+      frames: travelFrames,
+    },
+  };
 }
 
 function exportMaterials(faction: Faction) {
@@ -235,7 +285,7 @@ function exportMaterials(faction: Faction) {
 }
 
 const payload = {
-  version: 2,
+  version: 3,
   source: 'src/chars',
   space: { up: 'Y', facing: '-Z', unit: 'board square = 1' },
   materials: Object.fromEntries(

@@ -14,7 +14,12 @@ What gets built, per (character, faction):
     child joint so the skeleton is usable in the viewport;
   * one skinned mesh, rigid weights of 1.0 per joint, faction materials;
   * the idle / guard / victory pose tables as constant-interpolation keyframes
-    on frames 1 / 11 / 21.
+    on frames 1 / 11 / 21 — they are stills, so they hold rather than blend;
+  * the character's travel cycle from frame TRAVEL_START, interpolated, with
+    the vertical bob on the armature object. That cycle is sampled out of
+    src/render/locomotion.ts by the exporter rather than described here, so
+    the gait in the viewport is the gait the game plays and a wing beat or a
+    hoof fold cannot drift between the two.
 
 Pose rotations are converted into bone-local space as B⁻¹ · R · B, where B is
 the bone's rest orientation in armature space. That lets the armature keep
@@ -43,6 +48,8 @@ CONVERT = Matrix.Rotation(math.pi, 4, "Z") @ Matrix.Rotation(math.pi / 2, 4, "X"
 ORDER = ("huscarl", "berserkr", "volva", "jotunn", "valkyrie", "jarl")
 FACTIONS = ("ash", "ember")
 POSE_FRAMES = (("idle", 1), ("guard", 11), ("victory", 21))
+# The travel cycle is keyed after the stills, one Blender frame per sample.
+TRAVEL_START = 41
 
 # When a joint has several children, these read as the spine of the chain.
 PREFERRED_CHILD = ("spine", "chest", "head", "mount", "hips")
@@ -299,13 +306,14 @@ def realize(name, faction, char, palette, location, collection):
     mod = obj.modifiers.new("Armature", "ARMATURE")
     mod.object = arm_obj
 
-    # ---- poses ----
+    # ---- poses and travel ----
     arm_obj.animation_data_create()
     action = bpy.data.actions.new("%s_%s_poses" % (name, faction))
     arm_obj.animation_data.action = action
     rest_basis = {b.name: b.matrix_local.to_3x3() for b in arm_data.bones}
-    for pose_name, frame in POSE_FRAMES:
-        table = char["poses"][pose_name]
+
+    def write_table(table, frame):
+        """Key every bone this table names, converted into bone-local space."""
         for bname in order:
             pb = arm_obj.pose.bones[bname]
             pb.rotation_mode = "QUATERNION"
@@ -316,11 +324,35 @@ def realize(name, faction, char, palette, location, collection):
             local = basis.inverted() @ three_rot(*euler).to_3x3() @ basis
             pb.rotation_quaternion = local.to_quaternion()
             pb.keyframe_insert("rotation_quaternion", frame=frame)
-    curves = action_fcurves(action)
-    for fc in curves:
+
+    for pose_name, frame in POSE_FRAMES:
+        write_table(char["poses"][pose_name], frame)
+
+    # The three canonical poses are stills, so they hold rather than blend.
+    for fc in action_fcurves(action):
         for kp in fc.keyframe_points:
             kp.interpolation = "CONSTANT"
-    if not curves:
+
+    # Travel cycle, sampled straight out of src/render/locomotion.ts so the
+    # gait in the viewport is the gait the game plays. Keyed after the stills
+    # and interpolated, because unlike them it is a continuous motion; the bob
+    # rides on the armature object, which is where three applies it too.
+    travel = char.get("travel")
+    frames = travel.get("frames", []) if travel else []
+    base = arm_obj.location.copy()
+    for i, f in enumerate(frames):
+        frame = TRAVEL_START + i
+        write_table(f["bones"], frame)
+        # three's +Y maps to Blender's +Z under CONVERT, so the bob is a Z lift.
+        arm_obj.location = base + Vector((0.0, 0.0, f.get("bob", 0.0)))
+        arm_obj.keyframe_insert("location", frame=frame)
+    arm_obj.location = base
+
+    for fc in action_fcurves(action):
+        for kp in fc.keyframe_points:
+            if kp.co.x >= TRAVEL_START:
+                kp.interpolation = "LINEAR"
+    if not action_fcurves(action):
         print("  warning: %s_%s produced no pose fcurves" % (name, faction))
 
     return arm_obj, obj, len(mesh.polygons)
@@ -466,7 +498,11 @@ def build_scene(payload):
                 pass
 
     scene.frame_start = 1
-    scene.frame_end = 21
+    travel_len = max(
+        (len(payload["characters"][n].get("travel", {}).get("frames", [])) for n in ORDER),
+        default=0,
+    )
+    scene.frame_end = TRAVEL_START + travel_len - 1 if travel_len else 21
     scene.frame_set(1)
     return built
 
