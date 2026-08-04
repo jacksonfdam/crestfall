@@ -472,11 +472,11 @@ export type CameraIdea = 'hold' | 'push' | 'orbit' | 'rise';
 
 export interface CameraOptions {
   idea?: CameraIdea;
-  /** Eye height at the cut-in, in board units. */
+  /** Nudge on top of the bird lift, in board units. Cannot lower the eye. */
   height?: number;
-  /** Eye distance from the pair's midpoint. */
+  /** Eye distance back from the pair's midpoint. */
   dist?: number;
-  /** Which side of the approach the camera watches from. */
+  /** Which shoulder of the attacker the camera watches over. */
   side?: 1 | -1;
   /** Camera has fully eased in by here. */
   cutIn?: number;
@@ -487,11 +487,42 @@ export interface CameraOptions {
 const _camPos: Vec3 = [0, 0, 0];
 const _camLook: Vec3 = [0, 0, 0];
 
+/** Base eye lift above the board, before a row's own `height` nudge. */
+const BIRD_LIFT = 1.9;
 /**
- * The house camera grammar: ease from the board camera to a low framing that
- * looks across the approach axis (so the two silhouettes separate), hold
- * through the action with at most one idea, then widen as the victor settles.
- * The director's release() finishes the return to the board camera.
+ * Floor on the eye height. The tallest piece is the valkyrie at 1.5, so an eye
+ * held above this can never end up inside one whatever a row asks for.
+ */
+const BIRD_MIN_LIFT = 2.0;
+/**
+ * How far the bearing swings off dead-astern, toward `side`. Directly behind
+ * the attacker he eclipses the victim; over a shoulder both read.
+ */
+const BIRD_BEARING = 0.55;
+/**
+ * Half-extent of the board plus a little rim. The eye is clamped inside this
+ * so a duel on an edge or corner square cannot fling the camera out over
+ * nothing — which is what "the camera gets lost" was.
+ */
+const BOARD_HALF = 4.2;
+
+const clampToBoard = (v: number): number =>
+  v < -BOARD_HALF ? -BOARD_HALF : v > BOARD_HALF ? BOARD_HALF : v;
+
+/**
+ * The house camera grammar: a bird view over the attacker's shoulder, looking
+ * down and forward onto the pair, held above the pieces and inside the board
+ * for the whole duel. One idea through the action, then ease back and up as the
+ * victor settles; the director's release() finishes the return to the board
+ * camera.
+ *
+ * It is a high angle rather than a low one because the low across-the-approach
+ * framing this replaced put the eye at chest height among a board full of
+ * standing pieces, which is a geometry that cannot be made reliably safe: the
+ * mark is derived from the two fighters alone, so it regularly landed on an
+ * occupied square, and the shot filled with somebody's back. From above, the
+ * pieces are below the eye by construction, and the two silhouettes separate
+ * vertically on screen instead of side by side.
  *
  * `t` is passed to moveTo as a linear ramp — moveTo eases it internally, and
  * easing twice would stall the cut-in.
@@ -509,30 +540,47 @@ export function camera(
   const act = phase(t, cutIn, outAt);
   const back = easeInOutCubic(phase(t, outAt, 1));
 
-  let height = opts.height ?? 1.1;
+  // `height` reads as a nudge on top of the bird lift, so the rows keep their
+  // relative framing without any of them being able to drop the eye low.
+  let lift = BIRD_LIFT + (opts.height ?? 1.1);
   let dist = opts.dist ?? 2.5;
-  let swing = 0;
+  let swing = BIRD_BEARING;
   if (idea === 'push') dist -= 0.55 * easeInOutCubic(act);
-  else if (idea === 'orbit') swing = 0.44 * easeInOutCubic(act);
-  else if (idea === 'rise') height += 1.15 * easeInOutCubic(act);
+  else if (idea === 'orbit') swing += 0.5 * easeInOutCubic(act);
+  else if (idea === 'rise') lift += 1.15 * easeInOutCubic(act);
   // Cut-out: ease back and up as the victor walks to idle.
   dist += 0.7 * back;
-  height += 0.35 * back;
+  lift += 0.35 * back;
 
   // Midpoint of the staged pair, biased a third of the way toward the victim.
   const midGap = GAP * 0.5 - GAP * 0.16;
-  // Watch from across the approach; a touch of -f makes it a 3/4 view.
-  const ox = (s.rx * side * Math.cos(swing) - s.fx * Math.sin(swing)) * dist;
-  const oz = (s.rz * side * Math.cos(swing) - s.fz * Math.sin(swing)) * dist;
   const cx = s.vx - s.fx * midGap;
   const cz = s.vz - s.fz * midGap;
 
-  _camPos[0] = cx + ox - s.fx * 0.45;
-  _camPos[1] = s.y + height;
-  _camPos[2] = cz + oz - s.fz * 0.45;
-  _camLook[0] = cx + s.fx * 0.15;
-  _camLook[1] = s.y + 0.55;
-  _camLook[2] = cz + s.fz * 0.15;
+  // Bearing: start behind the attacker (-f) and rotate `swing` toward the
+  // chosen side, which puts the eye over his shoulder instead of dead astern.
+  const a = swing * side;
+  const bx = -s.fx * Math.cos(a) + s.rx * Math.sin(a);
+  const bz = -s.fz * Math.cos(a) + s.rz * Math.sin(a);
+
+  // Hold the eye over the board, and pay for whatever horizontal reach that
+  // costs with height, so the shot keeps its distance from the pair. A duel in
+  // a corner therefore becomes a steeper look-down rather than a squashed near
+  // miss — and steeper is also further from a combatant the choreography throws
+  // upward, which is the only thing up here that can reach the eye at all (the
+  // valkyrie tops out at 4.3 in qxq).
+  const want = Math.hypot(dist, lift);
+  const ex = clampToBoard(cx + bx * dist);
+  const ez = clampToBoard(cz + bz * dist);
+  const flat = Math.hypot(ex - cx, ez - cz);
+  const lifted = Math.sqrt(Math.max(0, want * want - flat * flat));
+
+  _camPos[0] = ex;
+  _camPos[1] = s.y + Math.max(BIRD_MIN_LIFT, lifted);
+  _camPos[2] = ez;
+  _camLook[0] = cx;
+  _camLook[1] = s.y + 0.5;
+  _camLook[2] = cz;
   ctx.camera.moveTo(_camPos, _camLook, clamp01(t / cutIn));
 }
 
